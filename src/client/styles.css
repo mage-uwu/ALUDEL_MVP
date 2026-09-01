@@ -274,8 +274,8 @@ body {
   outline: none;
 }
 
-/* ends-with */
-.ends-label {
+/* outcomes */
+.outcomes-label {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 12px;
@@ -283,15 +283,15 @@ body {
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
-.ends-grid { display: flex; flex-wrap: wrap; gap: 10px; }
-.end-btn {
+.outcomes-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.outcome-btn {
   position: relative;
   flex: 1 1 40%;
   min-width: 0;
   min-height: 64px;
   display: flex;
 }
-.end-btn input {
+.outcome-btn input {
   flex: 1 1 0;
   width: 0;
   min-width: 0;
@@ -306,8 +306,8 @@ body {
   text-align: center;
   outline: none;
 }
-.end-btn input:focus { border-color: var(--ink); }
-.end-btn .x {
+.outcome-btn input:focus { border-color: var(--ink); }
+.outcome-btn .x {
   position: absolute;
   top: -8px; right: -6px;
   width: 28px; height: 28px;

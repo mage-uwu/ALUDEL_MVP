@@ -47,7 +47,7 @@ const dumpTemplate = (t: Loaded): string =>
       ``,
       `  task "${k.name}"  every ${k.everyWeeks}w · within ${k.windowDays}d`,
       ...k.blocks.map((b) => `    ${b.kind.padEnd(6)} "${b.label}"${b.unit ? `  (${b.unit})` : ""}`),
-      `    ends → ${k.endsWith.map((e) => `[${e.label.toUpperCase() || "?"}]`).join("  ")}`,
+      `    outcomes → ${k.outcomes.map((e) => `[${e.label.toUpperCase() || "?"}]`).join("  ")}`,
     ]),
   ].join("\n");
 
@@ -191,7 +191,7 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
       ...tpl,
       tasks: [
         ...tpl.tasks,
-        { id: uid(), name: "New task", everyWeeks: 3, windowDays: 5, blocks: [], endsWith: [{ id: uid(), label: "DONE" }] },
+        { id: uid(), name: "New task", everyWeeks: 3, windowDays: 5, blocks: [], outcomes: [{ id: uid(), label: "DONE" }] },
       ],
     });
 
@@ -279,9 +279,9 @@ function TaskCard({
       ],
     }));
 
-  const addButton = () =>
+  const addOutcome = () =>
     patch((t) =>
-      t.endsWith.length >= 6 ? t : { ...t, endsWith: [...t.endsWith, { id: uid(), label: "DONE" }] }
+      t.outcomes.length >= 6 ? t : { ...t, outcomes: [...t.outcomes, { id: uid(), label: "DONE" }] }
     );
 
   return (
@@ -328,26 +328,26 @@ function TaskCard({
         />
       ))}
 
-      <p className="ends-label">Ends with</p>
-      <div className="ends-grid">
-        {task.endsWith.map((b) => (
-          <span key={b.id} className="end-btn">
+      <p className="outcomes-label">Outcomes</p>
+      <div className="outcomes-grid">
+        {task.outcomes.map((b) => (
+          <span key={b.id} className="outcome-btn">
             <input
               value={b.label}
               maxLength={60}
               onChange={(e) =>
                 patch((t) => ({
                   ...t,
-                  endsWith: t.endsWith.map((x) => (x.id === b.id ? { ...x, label: e.target.value } : x)),
+                  outcomes: t.outcomes.map((x) => (x.id === b.id ? { ...x, label: e.target.value } : x)),
                 }))
               }
-              aria-label="Button label"
+              aria-label="Outcome label"
             />
-            {task.endsWith.length > 1 && (
+            {task.outcomes.length > 1 && (
               <button
                 className="x"
-                aria-label="Remove button"
-                onClick={() => patch((t) => ({ ...t, endsWith: t.endsWith.filter((x) => x.id !== b.id) }))}
+                aria-label="Remove outcome"
+                onClick={() => patch((t) => ({ ...t, outcomes: t.outcomes.filter((x) => x.id !== b.id) }))}
               >×</button>
             )}
           </span>
@@ -358,7 +358,7 @@ function TaskCard({
         <button onClick={() => addBlock("photo")}>+ Photo</button>
         <button onClick={() => addBlock("text")}>+ Text</button>
         <button onClick={() => addBlock("number")}>+ Number</button>
-        <button onClick={addButton}>+ Button</button>
+        <button onClick={addOutcome}>+ Outcome</button>
       </div>
     </section>
   );

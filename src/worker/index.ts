@@ -45,7 +45,7 @@ const starterDoc = () => ({
       everyWeeks: 3,
       windowDays: 5,
       blocks: [{ id: crypto.randomUUID(), kind: "photo", label: "Photo", unit: "" }],
-      endsWith: [{ id: crypto.randomUUID(), label: "DONE" }],
+      outcomes: [{ id: crypto.randomUUID(), label: "DONE" }],
     },
   ],
 });

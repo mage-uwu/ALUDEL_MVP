@@ -1,7 +1,8 @@
 // The single source of truth for what a template can be. The types make
-// invalid states unrepresentable (buttons exist only in `endsWith`, cadence
-// values only from the fixed sets) and `normalizeTemplate` is the server-side
-// gate that clamps any untrusted document into that shape or rejects it.
+// invalid states unrepresentable (outcome buttons exist only in `outcomes`,
+// which is never empty; cadence values only from the fixed sets) and
+// `normalizeTemplate` is the server-side gate that clamps any untrusted
+// document into that shape or rejects it.
 
 export const EVERY_WEEKS = [1, 2, 3, 4, 6, 8, 12] as const;
 export const WINDOW_DAYS = [1, 2, 3, 5, 7, 10, 14] as const;
@@ -17,7 +18,7 @@ export interface Block {
   unit: string; // meaningful for "number" only; kept empty otherwise
 }
 
-export interface EndButton {
+export interface Outcome {
   id: string;
   label: string;
 }
@@ -28,7 +29,7 @@ export interface Task {
   everyWeeks: EveryWeeks;
   windowDays: WindowDays;
   blocks: Block[];
-  endsWith: EndButton[]; // always at least one — a task must have an outcome
+  outcomes: Outcome[]; // always at least one — a task must have an outcome
 }
 
 export interface Template {
@@ -42,7 +43,7 @@ export const LIMITS = {
   unit: 12,
   tasks: 30,
   blocks: 20,
-  buttons: 6,
+  outcomes: 6,
   body: 128 * 1024,
 } as const;
 
@@ -77,17 +78,18 @@ function normalizeTask(input: unknown): Task {
         unit: kind === "number" ? str(b.unit, LIMITS.unit, "").trim() : "",
       };
     });
-  const endsWith = arr(t.endsWith, LIMITS.buttons)
+  // `endsWith` is the pre-rename key; accept it so older stored docs load.
+  const outcomes = arr(t.outcomes ?? t.endsWith, LIMITS.outcomes)
     .map(rec)
-    .map((b): EndButton => ({ id: id(b.id), label: str(b.label, LIMITS.label, "DONE") }));
-  if (endsWith.length === 0) endsWith.push({ id: crypto.randomUUID(), label: "DONE" });
+    .map((b): Outcome => ({ id: id(b.id), label: str(b.label, LIMITS.label, "DONE") }));
+  if (outcomes.length === 0) outcomes.push({ id: crypto.randomUUID(), label: "DONE" });
   return {
     id: id(t.id),
     name: str(t.name, LIMITS.name, "Untitled task"),
     everyWeeks: oneOf(t.everyWeeks, EVERY_WEEKS, 3),
     windowDays: oneOf(t.windowDays, WINDOW_DAYS, 5),
     blocks,
-    endsWith,
+    outcomes,
   };
 }
 
