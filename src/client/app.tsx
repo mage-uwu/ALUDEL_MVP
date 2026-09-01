@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Logo } from "./logo";
 import { Check, ChevronLeft, ChevronRight, Grip, More, Pencil, Plus, X } from "./icons";
 import {
+  type AludelPlace,
   type Block,
   type BlockKind,
   type Task,
   type Template,
 } from "../shared/model";
+import { loadMaps, PLACE_FIELDS, toAludelPlace } from "./maps";
 
 type Role = "owner" | "admin" | "member";
 
@@ -21,9 +23,15 @@ interface TeamRef {
   name: string;
   role: Role;
 }
+/** Browser-side Maps config: a referrer-restricted public key (null = maps off) and a map id. */
+interface MapsConfig {
+  key: string | null;
+  mapId: string;
+}
 interface Me {
   user: Account;
   teams: TeamRef[];
+  maps: MapsConfig;
 }
 interface Member {
   id: string;
@@ -66,7 +74,9 @@ interface Dispatch {
 interface SiteDoc {
   id: string;
   clientName: string;
+  /** Derived by the server from place.formattedAddress; empty when there is no place. */
   address: string;
+  place: AludelPlace | null;
   emails: string[];
   listId: string | null;
   dispatches: Dispatch[];
@@ -283,7 +293,7 @@ export default function App() {
     if (screen === "members")
       return <Members team={team} me={me} onBack={() => setScreen("templates")} onChanged={load} />;
     if (openId) return <Editor teamId={team.id} id={openId} onBack={() => setOpenId(null)} />;
-    if (openSite) return <SiteEditor teamId={team.id} id={openSite} onBack={() => setOpenSite(null)} />;
+    if (openSite) return <SiteEditor teamId={team.id} id={openSite} maps={me.maps} onBack={() => setOpenSite(null)} />;
     const head = (
       <HomeHeader
         team={team}
@@ -1113,7 +1123,7 @@ function Sites({
   );
 }
 
-function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack: () => void }) {
+function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; maps: MapsConfig; onBack: () => void }) {
   const [site, setSite] = useState<SiteDoc | null>(null);
   const [lists, setLists] = useState<ListRef[]>([]);
   const [templates, setTemplates] = useState<Meta[]>([]);
@@ -1124,7 +1134,8 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
 
   const [wizard, setWizard] = useState(false);
   const [listSheet, setListSheet] = useState(false);
-  const fields = (x: SiteDoc) => ({ clientName: x.clientName, address: x.address, emails: x.emails, listId: x.listId });
+  const [placeSheet, setPlaceSheet] = useState(false);
+  const fields = (x: SiteDoc) => ({ clientName: x.clientName, place: x.place, emails: x.emails, listId: x.listId });
   const dirty = useMemo(() => !!site && JSON.stringify(fields(site)) !== saved, [site, saved]);
 
   const load = () =>
@@ -1145,7 +1156,7 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
     termDoc(
       [
         `site "${site.clientName}"`,
-        `  ${site.address || "—"}`,
+        `  ${site.place ? `${site.place.formattedAddress}  (${site.place.lat.toFixed(5)}, ${site.place.lng.toFixed(5)})` : "—"}`,
         `  ${site.emails.join(", ") || "—"}  ·  ${listName}`,
         ``,
         ...(site.dispatches.length
@@ -1211,7 +1222,7 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
       <header className="editor-top">
         <button className="icon-btn" onClick={back} aria-label="Back"><ChevronLeft /></button>
         <h1 className="site-title">
-          {[site.clientName.trim(), site.address.trim()].filter(Boolean).join(" · ") || "New site"}
+          {[site.clientName.trim(), site.place?.name ?? ""].filter(Boolean).join(" · ") || "New site"}
         </h1>
         <div className="menu-wrap">
           <button className="icon-btn" aria-label="Options" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
@@ -1238,11 +1249,23 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
           <input className="text-input left" value={site.clientName} maxLength={80} placeholder="Smith residence"
             onChange={(e) => patch({ clientName: e.target.value })} />
         </label>
-        <label className="field">
-          <span className="section-label">Address</span>
-          <input className="text-input left" value={site.address} maxLength={240} placeholder="12 Lakeview Dr"
-            onChange={(e) => patch({ address: e.target.value })} />
-        </label>
+        <div className="field">
+          <span className="section-label">Location</span>
+          <button className={`row-btn${site.place ? " tall" : ""}`} onClick={() => setPlaceSheet(true)} aria-label="Choose location">
+            <span className="row-btn-text">
+              {site.place ? (
+                <>
+                  {site.place.name}
+                  <span className="place-addr">{site.place.formattedAddress}</span>
+                </>
+              ) : (
+                <span className="placeholder">Find it on the map</span>
+              )}
+            </span>
+            <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+          </button>
+          {site.place && <p className="attribution">Place data by Google</p>}
+        </div>
         <div className="field">
           <span className="section-label">Emails</span>
           <button className="row-btn" onClick={() => setWizard(true)} aria-label="Edit emails">
@@ -1326,6 +1349,161 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
           }}
         />
       )}
+
+      {placeSheet && (
+        <PlaceSheet
+          maps={maps}
+          place={site.place}
+          onDone={(place) => {
+            patch({ place, address: place?.formattedAddress ?? "" });
+            setPlaceSheet(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Fullscreen place capture: a Google Places autocomplete (the current
+ * PlaceAutocompleteElement, not the legacy widget) above a map that plots the
+ * chosen place. One fetchFields per selection, normalized on the spot into an
+ * AludelPlace; the live Place object is never kept. The choice is staged like
+ * every other field and lands on Save site.
+ */
+function PlaceSheet({
+  maps,
+  place,
+  onDone,
+}: {
+  maps: MapsConfig;
+  place: AludelPlace | null;
+  onDone: (place: AludelPlace | null) => void;
+}) {
+  const [draft, setDraft] = useState(place);
+  const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
+  const pickerHost = useRef<HTMLDivElement>(null);
+  const mapHost = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const markerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+
+  useEffect(() => {
+    const key = maps.key;
+    if (!key) return setStatus("failed");
+    let live = true;
+    (async () => {
+      try {
+        await loadMaps(key);
+        const [{ PlaceAutocompleteElement }, { Map }, { AdvancedMarkerElement }] = await Promise.all([
+          google.maps.importLibrary("places"),
+          google.maps.importLibrary("maps"),
+          google.maps.importLibrary("marker"),
+        ]);
+        if (!live || !pickerHost.current || !mapHost.current) return;
+
+        const picker = new PlaceAutocompleteElement();
+        picker.className = "place-picker";
+        picker.setAttribute("aria-label", "Search for a place");
+        picker.addEventListener("gmp-select", async (ev) => {
+          const { placePrediction } = ev as google.maps.places.PlacePredictionSelectEvent;
+          try {
+            const p = placePrediction.toPlace();
+            // exactly one fetch per pick: this call closes the autocomplete session
+            await p.fetchFields({ fields: PLACE_FIELDS });
+            const next = toAludelPlace(p);
+            if (!next)
+              return setAlert({ title: "No location for that", message: "Google returned that place without coordinates. Try a more specific address." });
+            setDraft(next);
+          } catch {
+            setAlert({ title: "Couldn't fetch that place", message: "Google didn't return its details. Check the connection and try again." });
+          }
+        });
+        pickerHost.current.replaceChildren(picker);
+
+        mapRef.current = new Map(mapHost.current, {
+          mapId: maps.mapId,
+          center: { lat: 20, lng: 0 },
+          zoom: 1,
+          disableDefaultUI: true,
+          zoomControl: true,
+          gestureHandling: "greedy",
+          clickableIcons: false,
+        });
+        markerRef.current = new AdvancedMarkerElement({ map: mapRef.current });
+        setStatus("ready");
+      } catch {
+        if (live) setStatus("failed");
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [maps.key, maps.mapId]);
+
+  // the marker follows the draft: Google's viewport when it gave one, else street level on the point
+  useEffect(() => {
+    const map = mapRef.current;
+    const marker = markerRef.current;
+    if (status !== "ready" || !map || !marker) return;
+    if (!draft) {
+      marker.position = null;
+      return;
+    }
+    marker.position = { lat: draft.lat, lng: draft.lng };
+    marker.title = draft.name;
+    if (draft.viewport) map.fitBounds(draft.viewport, 24);
+    else {
+      map.setCenter({ lat: draft.lat, lng: draft.lng });
+      map.setZoom(17);
+    }
+  }, [draft, status]);
+
+  return (
+    <div className="sheet">
+      <div className="shell editor">
+        <header className="editor-top">
+          <button className="icon-btn" onClick={() => onDone(draft)} aria-label="Back"><ChevronLeft /></button>
+          <h1 className="site-title">Location</h1>
+          {draft && (
+            <button className="icon-btn danger" aria-label="Clear location" onClick={() => setDraft(null)}><X /></button>
+          )}
+        </header>
+
+        <section className="card glass-frosted task">
+          <div className="field">
+            <span className="section-label">Search</span>
+            <div ref={pickerHost} />
+            {status === "loading" && <p className="group-empty">Loading Google Maps…</p>}
+            {status === "failed" && (
+              <p className="group-empty">
+                {maps.key
+                  ? "Google Maps didn't load. Check the connection and try again."
+                  : "Google Maps isn't set up for this deployment yet (GOOGLE_MAPS_BROWSER_KEY)."}
+              </p>
+            )}
+          </div>
+          <div className="map-wrap">
+            <div ref={mapHost} className="map" aria-label="Map" />
+            {status === "ready" && !draft && <span className="map-hint">Pick a place to plot it</span>}
+          </div>
+          {draft && (
+            <div className="place-row">
+              <span className="template-text">
+                <span className="place-name">{draft.name}</span>
+                <span className="place-addr">{draft.formattedAddress}</span>
+              </span>
+            </div>
+          )}
+          <p className="attribution">Place data by Google</p>
+        </section>
+
+        <div className="dock">
+          <button className="big-btn primary" onClick={() => onDone(draft)}>Done</button>
+        </div>
+      </div>
+
+      {alert && <Modal title={alert.title} message={alert.message} onClose={() => setAlert(null)} />}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 /// <reference types="@cloudflare/workers-types" />
-import { LIMITS, normalizeTemplate } from "../shared/model";
+import { LIMITS, normalizePlace, normalizeTemplate, type AludelPlace } from "../shared/model";
 import {
   currentUser,
   finishLogin,
@@ -22,6 +22,10 @@ export interface Env {
   APP_ORIGIN?: string;
   /** Optional comma-separated domain allow-list, e.g. "acme.com,acme.co.uk". */
   ALLOWED_EMAIL_DOMAINS?: string;
+  /** Browser key for the Maps JavaScript API — public by nature, so restrict it by HTTP referrer. */
+  GOOGLE_MAPS_BROWSER_KEY?: string;
+  /** Map ID (Cloud-based map style); advanced markers need one. Defaults to Google's demo id. */
+  GOOGLE_MAPS_MAP_ID?: string;
 }
 
 const HEADERS = {
@@ -76,6 +80,24 @@ const parseEmails = (raw: unknown): string[] => {
     return [];
   }
 };
+
+/** A stored place column back into a record; anything that no longer validates reads as no place. */
+const parsePlace = (v: unknown): AludelPlace | null => {
+  if (typeof v !== "string" || !v) return null;
+  try {
+    return normalizePlace(JSON.parse(v));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The place field of a site body: absent or null clears the location, a valid
+ * AludelPlace is kept, and anything else is refused (undefined) rather than
+ * quietly dropped — a site never ends up pointing at a location it never chose.
+ */
+const placeOf = (v: unknown): AludelPlace | null | undefined =>
+  v === null || v === undefined ? null : (normalizePlace(v) ?? undefined);
 
 const starterDoc = () => ({
   tasks: [
@@ -241,17 +263,20 @@ async function teamRoutes(
       const clientName = field(body?.clientName, LIMITS.name) || "New site";
       const listId = await listFor(body?.listId);
       if (listId === undefined) return error(422, "Unknown list");
+      const place = placeOf(body?.place);
+      if (place === undefined) return error(422, "Invalid place");
       const id = crypto.randomUUID();
       await env.DB.prepare(
-        `INSERT INTO sites (id, team_id, list_id, client_name, address, emails, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sites (id, team_id, list_id, client_name, address, place, emails, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           id,
           teamId,
           listId,
           clientName,
-          field(body?.address, 240),
+          place?.formattedAddress ?? "",
+          place ? JSON.stringify(place) : null,
           JSON.stringify(emailsOf(body?.emails)),
           nowIso(),
           nowIso()
@@ -276,11 +301,11 @@ async function teamRoutes(
 
     if (!onDispatches && req.method === "GET") {
       const row = await env.DB.prepare(
-        `SELECT id, client_name AS clientName, address, emails, list_id AS listId
+        `SELECT id, client_name AS clientName, address, place, emails, list_id AS listId
          FROM sites WHERE id = ?`
       )
         .bind(siteId)
-        .first<{ emails: string }>();
+        .first<{ emails: string; place: string | null }>();
       const { results: dispatches } = await env.DB.prepare(
         `SELECT d.id, d.template_id AS templateId, t.name AS templateName,
                 d.template_version AS templateVersion, t.version AS currentVersion,
@@ -290,7 +315,7 @@ async function teamRoutes(
       )
         .bind(siteId)
         .all();
-      return json({ ...row, emails: parseEmails(row?.emails), dispatches });
+      return json({ ...row, place: parsePlace(row?.place), emails: parseEmails(row?.emails), dispatches });
     }
 
     if (!onDispatches && req.method === "PATCH") {
@@ -300,11 +325,21 @@ async function teamRoutes(
       if (!clientName) return error(422, "Client name required");
       const listId = await listFor(body.listId);
       if (listId === undefined) return error(422, "Unknown list");
+      const place = placeOf(body.place);
+      if (place === undefined) return error(422, "Invalid place");
       await env.DB.prepare(
-        `UPDATE sites SET client_name = ?, address = ?, emails = ?, list_id = ?, updated_at = ?
+        `UPDATE sites SET client_name = ?, address = ?, place = ?, emails = ?, list_id = ?, updated_at = ?
          WHERE id = ?`
       )
-        .bind(clientName, field(body.address, 240), JSON.stringify(emailsOf(body.emails)), listId, nowIso(), siteId)
+        .bind(
+          clientName,
+          place?.formattedAddress ?? "",
+          place ? JSON.stringify(place) : null,
+          JSON.stringify(emailsOf(body.emails)),
+          listId,
+          nowIso(),
+          siteId
+        )
         .run();
       return json({ ok: true });
     }
@@ -486,7 +521,11 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     )
       .bind(user.id)
       .all();
-    return json({ user, teams: results });
+    return json({
+      user,
+      teams: results,
+      maps: { key: env.GOOGLE_MAPS_BROWSER_KEY || null, mapId: env.GOOGLE_MAPS_MAP_ID || "DEMO_MAP_ID" },
+    });
   }
 
   if (path === "/teams" && req.method === "POST") {

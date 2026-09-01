@@ -7,8 +7,11 @@ A task is just a name and an ordered list of blocks; buttons are placed like any
 invalid states are unrepresentable, and the server re-validates every document through the same
 `src/shared/model.ts` gate before it touches the database.
 
-**Sites**: Lists → Worksites → Dispatches. A worksite is a client name, an address and up to ten
-contact emails, sitting in at most one list (lists are containers of worksites). Dispatching *borrows* a
+**Sites**: Lists → Worksites → Dispatches. A worksite is a client name, a location and up to ten
+contact emails, sitting in at most one list (lists are containers of worksites). A location is a
+real Google place, not typed text: picked with the current Places autocomplete, plotted on a map,
+and stored as a normalized `AludelPlace` record (place id, name, formatted address, lat/lng,
+viewport, address parts, fetch time) that the server re-validates through `normalizePlace`. Dispatching *borrows* a
 template for a worksite: the dispatch references the template rather than copying it, records the
 version it was borrowed at, and the site's metadata rides along by association. A site can hold
 one dispatch per template, and deleting a list leaves its sites in place, unlisted.
@@ -44,6 +47,30 @@ wrangler secret put GOOGLE_CLIENT_SECRET
 
 For local development put the same two keys in `.dev.vars` (gitignored). If the Worker is
 served on a different origin than the request host, set `APP_ORIGIN` as a var.
+
+### Google Maps (locations)
+
+Site locations use the Maps JavaScript API with the **new** Places classes
+(`PlaceAutocompleteElement` + `gmp-select`, `Place.fetchFields`, `AdvancedMarkerElement`) —
+none of the legacy Autocomplete / PlaceResult surface. One `fetchFields` call per pick, for
+exactly the fields that are stored, so each selection bills one autocomplete session plus one
+Place Details (Essentials/Pro) request; the live `Place` object is never persisted.
+
+1. In the same Google Cloud project enable **Maps JavaScript API** and **Places API (New)**.
+2. Create a browser API key, restrict it to **Websites** with your origin
+   (`https://<your-domain>/*`), and restrict it to those two APIs.
+3. Give the Worker the key as a plain var — it ships to the browser, the referrer restriction is
+   what protects it — and optionally a Map ID (Cloud-based styling; advanced markers need one,
+   `DEMO_MAP_ID` is the fallback):
+
+```
+GOOGLE_MAPS_BROWSER_KEY = "AIza..."
+GOOGLE_MAPS_MAP_ID = "..."          # optional
+```
+
+Nothing from Google loads until the Location sheet is opened, and without a key the sheet says so
+instead of failing quietly. `public/_headers` carries Google's documented CSP allow-list for the
+Maps JavaScript API; the rest of the app stays `'self'`.
 
 ### Who may sign in
 

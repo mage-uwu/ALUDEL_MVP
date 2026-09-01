@@ -66,6 +66,7 @@ const TABLES = [
      list_id TEXT REFERENCES lists(id) ON DELETE SET NULL,
      client_name TEXT NOT NULL,
      address TEXT NOT NULL DEFAULT '',
+     place TEXT,
      emails TEXT NOT NULL DEFAULT '[]',
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
@@ -117,6 +118,8 @@ export function ensureSchema(db: D1Database): Promise<unknown> {
     await addColumn("ALTER TABLE templates ADD COLUMN team_id TEXT");
     // sites created before emails replaced phone
     await addColumn("ALTER TABLE sites ADD COLUMN emails TEXT NOT NULL DEFAULT '[]'");
+    // sites created before locations were real places (address is now derived from place)
+    await addColumn("ALTER TABLE sites ADD COLUMN place TEXT");
     await db.batch(INDEXES.map((sql) => db.prepare(sql)));
   })()).catch((e) => {
     ready = null;
