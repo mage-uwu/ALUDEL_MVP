@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  EVERY_WEEKS,
-  WINDOW_DAYS,
   type Block,
   type BlockKind,
   type Task,
@@ -45,7 +43,7 @@ const dumpTemplate = (t: Loaded): string =>
     `template "${t.name}"  v${t.version}`,
     ...t.tasks.flatMap((k) => [
       ``,
-      `  task "${k.name}"  every ${k.everyWeeks}w · within ${k.windowDays}d`,
+      `  task "${k.name}"`,
       ...k.blocks.map((b) => `    ${b.kind.padEnd(6)} "${b.label}"${b.unit ? `  (${b.unit})` : ""}`),
       `    outcomes → ${k.outcomes.map((e) => `[${e.label.toUpperCase() || "?"}]`).join("  ")}`,
     ]),
@@ -235,7 +233,7 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
       ...tpl,
       tasks: [
         ...tpl.tasks,
-        { id: uid(), name: "New task", everyWeeks: 3, windowDays: 5, blocks: [], outcomes: [{ id: uid(), label: "DONE" }] },
+        { id: uid(), name: "New task", blocks: [], outcomes: [{ id: uid(), label: "DONE" }] },
       ],
     });
 
@@ -349,28 +347,6 @@ function TaskCard({
         />
         <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
       </div>
-      <div className="cadence">
-        <select
-          value={task.everyWeeks}
-          onChange={(e) => patch((t) => ({ ...t, everyWeeks: Number(e.target.value) as Task["everyWeeks"] }))}
-          aria-label="Repeat cadence"
-        >
-          {EVERY_WEEKS.map((w) => (
-            <option key={w} value={w}>{w === 1 ? "Every week" : `Every ${w} weeks`}</option>
-          ))}
-        </select>
-        <span>,</span>
-        <select
-          value={task.windowDays}
-          onChange={(e) => patch((t) => ({ ...t, windowDays: Number(e.target.value) as Task["windowDays"] }))}
-          aria-label="Completion window"
-        >
-          {WINDOW_DAYS.map((d) => (
-            <option key={d} value={d}>{d === 1 ? "complete within 1 day" : `complete within ${d} days`}</option>
-          ))}
-        </select>
-      </div>
-
       <div className="block-list" ref={blockSort.ref}>
         {task.blocks.map((block, i) => (
           <BlockRow

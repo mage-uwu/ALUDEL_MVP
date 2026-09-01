@@ -2,10 +2,10 @@
 
 Dirt-simple form template builder on Cloudflare Workers + D1.
 
-**Model**: Templates → Tasks (molecules, with cadence) → Blocks (atoms: Photo, Text, Number, Button).
-Outcome buttons live only in a task's **Outcomes** section; every task keeps at least one. Cadence values come
-from fixed sets, picked via selects — invalid states are unrepresentable, and the server re-validates
-every document through the same `src/shared/model.ts` gate before it touches the database.
+**Model**: Templates → Tasks (molecules) → Blocks (atoms: Photo, Text, Number).
+Outcome buttons live only in a task's **Outcomes** section; every task keeps at least one —
+invalid states are unrepresentable, and the server re-validates every document through the same
+`src/shared/model.ts` gate before it touches the database.
 
 ## Develop
 

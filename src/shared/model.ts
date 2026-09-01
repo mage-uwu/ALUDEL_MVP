@@ -1,13 +1,7 @@
 // The single source of truth for what a template can be. The types make
 // invalid states unrepresentable (outcome buttons exist only in `outcomes`,
-// which is never empty; cadence values only from the fixed sets) and
-// `normalizeTemplate` is the server-side gate that clamps any untrusted
-// document into that shape or rejects it.
-
-export const EVERY_WEEKS = [1, 2, 3, 4, 6, 8, 12] as const;
-export const WINDOW_DAYS = [1, 2, 3, 5, 7, 10, 14] as const;
-export type EveryWeeks = (typeof EVERY_WEEKS)[number];
-export type WindowDays = (typeof WINDOW_DAYS)[number];
+// which is never empty) and `normalizeTemplate` is the server-side gate that
+// clamps any untrusted document into that shape or rejects it.
 
 export type BlockKind = "photo" | "text" | "number";
 
@@ -26,8 +20,6 @@ export interface Outcome {
 export interface Task {
   id: string;
   name: string;
-  everyWeeks: EveryWeeks;
-  windowDays: WindowDays;
   blocks: Block[];
   outcomes: Outcome[]; // always at least one — a task must have an outcome
 }
@@ -54,9 +46,6 @@ const str = (v: unknown, max: number, fallback: string): string =>
 
 const id = (v: unknown): string =>
   typeof v === "string" && /^[0-9a-fA-F-]{1,36}$/.test(v) ? v : crypto.randomUUID();
-
-const oneOf = <T,>(v: unknown, allowed: readonly T[], fallback: T): T =>
-  allowed.includes(v as T) ? (v as T) : fallback;
 
 const rec = (v: unknown): Record<string, unknown> =>
   typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
@@ -86,8 +75,6 @@ function normalizeTask(input: unknown): Task {
   return {
     id: id(t.id),
     name: str(t.name, LIMITS.name, "Untitled task"),
-    everyWeeks: oneOf(t.everyWeeks, EVERY_WEEKS, 3),
-    windowDays: oneOf(t.windowDays, WINDOW_DAYS, 5),
     blocks,
     outcomes,
   };
