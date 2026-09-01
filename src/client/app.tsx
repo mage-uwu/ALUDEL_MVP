@@ -209,6 +209,7 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
   const [tpl, setTpl] = useState<Loaded | null>(null);
   const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
+  const [menu, setMenu] = useState(false);
   const dirty = useMemo(
     () => !!tpl && JSON.stringify({ name: tpl.name, tasks: tpl.tasks }) !== saved,
     [tpl, saved]
@@ -278,16 +279,46 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
     <div className="shell editor">
       <header className="editor-top">
         <button className="icon-btn" onClick={back} aria-label="Back">‹</button>
+        <input
+          className="title-input"
+          value={tpl.name}
+          maxLength={80}
+          onChange={(e) => setTpl({ ...tpl, name: e.target.value })}
+          aria-label="Template name"
+        />
         <span className="version">v{tpl.version}</span>
-        <button className="icon-btn danger" onClick={remove} aria-label="Delete template">🗑</button>
+        <div className="menu-wrap">
+          <button
+            className="icon-btn"
+            aria-label="Options"
+            aria-expanded={menu}
+            onClick={() => setMenu((m) => !m)}
+          >
+            <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
+              <circle cx="2" cy="2" r="1.8" />
+              <circle cx="9" cy="2" r="1.8" />
+              <circle cx="16" cy="2" r="1.8" />
+            </svg>
+          </button>
+          {menu && (
+            <>
+              <div className="menu-scrim" onClick={() => setMenu(false)} />
+              <div className="menu" role="menu">
+                <button
+                  className="menu-item danger"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenu(false);
+                    remove();
+                  }}
+                >
+                  Delete template
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </header>
-      <input
-        className="title-input"
-        value={tpl.name}
-        maxLength={80}
-        onChange={(e) => setTpl({ ...tpl, name: e.target.value })}
-        aria-label="Template name"
-      />
       {error && <p className="error">{error}</p>}
       <div className="task-list" ref={taskSort.ref}>
         {tpl.tasks.map((task, i) => (
