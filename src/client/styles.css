@@ -412,6 +412,21 @@ body {
   background: var(--room);
 }
 .email-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* an email row is a button: tap it to edit in place */
+.email-edit {
+  min-height: 44px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  font-weight: 800;
+  font-size: 16px;
+  text-align: left;
+  cursor: text;
+}
+.email-edit:active { background: rgba(255, 255, 255, 0.55); }
+.dispatch-row .text-input { margin-top: 0; min-height: 48px; }
 .add-email { display: flex; gap: 8px; align-items: stretch; }
 .add-email .text-input { margin-top: 0; }
 .big-btn.plus { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 56px; min-height: 56px; padding: 0; }

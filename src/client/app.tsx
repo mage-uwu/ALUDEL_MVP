@@ -1377,17 +1377,47 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: string[]) => void }) {
   const [list, setList] = useState(emails);
   const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
+  // while a modal is up, focus leaving the row input must not cancel the edit
+  const alertOpen = useRef(false);
+  alertOpen.current = alert !== null;
+
+  /** Validate one address against the list (ignoring the row being edited). Null means OK. */
+  const problem = (raw: string, ignore: number | null): { title: string; message: string } | null => {
+    const e = raw.trim().toLowerCase();
+    if (!EMAIL_RE.test(e))
+      return { title: "Not an email address", message: `“${raw.trim()}” is missing an @ or a domain. Check it and try again.` };
+    if (list.some((x, i) => x === e && i !== ignore))
+      return { title: "Already on the list", message: `${e} is already one of this site's emails.` };
+    return null;
+  };
 
   const add = () => {
-    const e = draft.trim().toLowerCase();
-    if (!e) return;
-    if (!EMAIL_RE.test(e))
-      return setAlert({ title: "Not an email address", message: `“${draft.trim()}” is missing an @ or a domain. Check it and try again.` });
+    if (!draft.trim()) return;
     if (list.length >= 10)
       return setAlert({ title: "That's the limit", message: "A site can hold up to 10 emails. Remove one to add another." });
-    if (!list.includes(e)) setList([...list, e]);
+    const bad = problem(draft, null);
+    if (bad) return setAlert(bad);
+    setList([...list, draft.trim().toLowerCase()]);
     setDraft("");
+  };
+
+  const startEdit = (i: number) => {
+    setEditing(i);
+    setEditDraft(list[i] ?? "");
+  };
+  const commitEdit = () => {
+    if (editing === null) return;
+    const bad = problem(editDraft, editing);
+    if (bad) return setAlert(bad);
+    setList(list.map((x, i) => (i === editing ? editDraft.trim().toLowerCase() : x)));
+    setEditing(null);
+  };
+  const cancelEdit = () => {
+    if (alertOpen.current) return;
+    setEditing(null);
   };
 
   return (
@@ -1400,12 +1430,43 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
         </header>
 
         <section className="card glass-frosted task">
-          {list.map((e) => (
-            <div key={e} className="member-row dispatch-row">
-              <span className="member-name email-name">{e}</span>
-              <button className="icon-btn danger" aria-label={`Remove ${e}`} onClick={() => setList(list.filter((x) => x !== e))}><X /></button>
-            </div>
-          ))}
+          {list.map((e, i) =>
+            editing === i ? (
+              <div key={e} className="member-row dispatch-row">
+                <input
+                  className="text-input left"
+                  type="email"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoFocus
+                  value={editDraft}
+                  maxLength={160}
+                  onChange={(ev) => setEditDraft(ev.target.value)}
+                  onKeyDown={(ev) => {
+                    if (ev.key === "Enter") (ev.preventDefault(), commitEdit());
+                    if (ev.key === "Escape") setEditing(null);
+                  }}
+                  onBlur={cancelEdit}
+                  aria-label={`Edit ${e}`}
+                />
+                <button
+                  className="icon-btn"
+                  aria-label="Save email"
+                  onPointerDown={(ev) => ev.preventDefault()}
+                  onClick={commitEdit}
+                >
+                  <Check size={18} />
+                </button>
+              </div>
+            ) : (
+              <div key={e} className="member-row dispatch-row">
+                <button className="email-name email-edit" onClick={() => startEdit(i)} aria-label={`Edit ${e}`}>
+                  {e}
+                </button>
+                <button className="icon-btn danger" aria-label={`Remove ${e}`} onClick={() => setList(list.filter((_, j) => j !== i))}><X /></button>
+              </div>
+            )
+          )}
           {list.length === 0 && <p className="group-empty">No emails yet. Add the people who should hear about this site.</p>}
           <div className="add-email">
             <input
@@ -1437,11 +1498,11 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
 
 function Modal({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
   return (
-    <div className="modal-scrim" onClick={onClose}>
+    <div className="modal-scrim" onClick={onClose} onPointerDown={(e) => e.preventDefault()}>
       <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby="modal-title" onClick={(e) => e.stopPropagation()}>
         <p id="modal-title" className="modal-title">{title}</p>
         <p className="modal-msg">{message}</p>
-        <button className="big-btn" autoFocus onClick={onClose}>OK</button>
+        <button className="big-btn" onClick={onClose}>OK</button>
       </div>
     </div>
   );
