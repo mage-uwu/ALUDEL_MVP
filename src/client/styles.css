@@ -346,7 +346,7 @@ body {
   text-transform: uppercase;
 }
 .menu-item.current { color: var(--ink); }
-.tick { color: var(--muted); font-size: 14px; }
+.tick { display: inline-flex; color: var(--muted); }
 .menu-sep { height: 1px; margin: 6px 8px; background: rgba(28, 32, 38, 0.08); }
 
 /* sites */
@@ -414,7 +414,7 @@ body {
 .email-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .add-email { display: flex; gap: 8px; align-items: stretch; }
 .add-email .text-input { margin-top: 0; }
-.big-btn.plus { flex: none; width: 56px; min-height: 56px; font-size: 26px; line-height: 1; padding: 0; }
+.big-btn.plus { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 56px; min-height: 56px; padding: 0; }
 
 /* modal: the place a mistake is pointed out, not the header */
 .modal-scrim {
@@ -494,7 +494,7 @@ body {
   white-space: nowrap;
 }
 .template-meta { color: var(--muted); font-size: 13px; font-weight: 600; }
-.chevron { color: #b4b9bf; font-size: 22px; line-height: 1; flex: none; }
+.chevron { display: inline-flex; color: #b4b9bf; flex: none; }
 /* light titanium chip */
 .version {
   background: var(--ti-light);
@@ -733,8 +733,7 @@ body {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
-  font-size: 17px;
-  color: #a2a7ae;
+  color: #a9aeb5;
 }
 .dragging {
   position: relative;
@@ -751,21 +750,24 @@ body {
   margin: -8px;
 }
 
-/* row controls */
+/* icon controls: a quiet circular hit area; the glyph is an SVG, never a typed character */
 .row-controls { display: flex; gap: 2px; }
 .icon-btn {
-  min-width: 40px;
-  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   border: 0;
-  border-radius: 12px;
+  border-radius: 50%;
   background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 18px;
+  color: #8a9098;
   cursor: pointer;
 }
-.icon-btn:active { background: rgba(255, 255, 255, 0.6); }
-.icon-btn.danger { color: #b3261e; }
+.icon-btn:active { background: rgba(28, 32, 38, 0.07); color: var(--ink); }
+/* removal reads as neutral until pressed — the row it sits on already says what it removes */
+.icon-btn.danger:active { color: #b3261e; background: rgba(179, 38, 30, 0.08); }
 
 /* docked primary action (new template / save) */
 .dock {

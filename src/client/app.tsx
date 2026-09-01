@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Logo } from "./logo";
+import { Check, ChevronLeft, ChevronRight, Grip, More, Plus, X } from "./icons";
 import {
   type Block,
   type BlockKind,
@@ -464,11 +465,7 @@ function HomeHeader({
           aria-expanded={menu}
           onClick={() => setMenu((m) => !m)}
         >
-          <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
-            <circle cx="2" cy="2" r="1.8" />
-            <circle cx="9" cy="2" r="1.8" />
-            <circle cx="16" cy="2" r="1.8" />
-          </svg>
+          <More />
         </button>
         {menu && (
           <>
@@ -483,7 +480,7 @@ function HomeHeader({
                   onClick={() => { setMenu(false); onSection(sec); }}
                 >
                   {sec === "templates" ? "Templates" : "Sites"}
-                  {section === sec && <span className="tick" aria-hidden="true">✓</span>}
+                  {section === sec && <span className="tick" aria-hidden="true"><Check /></span>}
                 </button>
               ))}
               <div className="menu-sep" />
@@ -573,7 +570,7 @@ function Home({
             </span>
           </span>
           <span className="version">v{t.version}</span>
-          <span className="chevron" aria-hidden="true">›</span>
+          <span className="chevron" aria-hidden="true"><ChevronRight /></span>
         </button>
       ))}
 
@@ -664,7 +661,7 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
   return (
     <div className="shell editor">
       <header className="editor-top">
-        <button className="icon-btn" onClick={back} aria-label="Back">‹</button>
+        <button className="icon-btn" onClick={back} aria-label="Back"><ChevronLeft /></button>
         <input
           className="title-input"
           value={tpl.name}
@@ -680,11 +677,7 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
             aria-expanded={menu}
             onClick={() => setMenu((m) => !m)}
           >
-            <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
-              <circle cx="2" cy="2" r="1.8" />
-              <circle cx="9" cy="2" r="1.8" />
-              <circle cx="16" cy="2" r="1.8" />
-            </svg>
+            <More />
           </button>
           {menu && (
             <>
@@ -864,8 +857,8 @@ function RowControls({
 }) {
   return (
     <span className="row-controls">
-      <button className="icon-btn handle" aria-label="Drag to reorder" onPointerDown={onHandleDown}>⠿</button>
-      <button className="icon-btn danger" aria-label="Remove" onClick={onRemove}>×</button>
+      <button className="icon-btn handle" aria-label="Drag to reorder" onPointerDown={onHandleDown}><Grip /></button>
+      <button className="icon-btn danger" aria-label="Remove" onClick={onRemove}><X /></button>
     </span>
   );
 }
@@ -920,7 +913,7 @@ function Members({
   return (
     <div className="shell">
       <header className="editor-top">
-        <button className="icon-btn" onClick={onBack} aria-label="Back">‹</button>
+        <button className="icon-btn" onClick={onBack} aria-label="Back"><ChevronLeft /></button>
         <span className="head-title">Members</span>
         <span className="version">{team.role}</span>
       </header>
@@ -966,9 +959,7 @@ function Members({
                   if (self) location.href = "/";
                 })();
               }}
-            >
-              ×
-            </button>
+            ><X /></button>
           )}
         </div>
       ))}
@@ -1017,9 +1008,7 @@ function Members({
                 onClick={guard(() =>
                   api(`/teams/${team.id}/invites/${encodeURIComponent(i.id)}`, { method: "DELETE" })
                 )}
-              >
-                ×
-              </button>
+              ><X /></button>
             </div>
           ))}
         </section>
@@ -1124,7 +1113,7 @@ function Sites({
         </span>
       </span>
       {x.dispatches > 0 && <span className="version">{x.dispatches} ⇢</span>}
-      <span className="chevron" aria-hidden="true">›</span>
+      <span className="chevron" aria-hidden="true"><ChevronRight /></span>
     </button>
   );
 
@@ -1153,9 +1142,7 @@ function Sites({
             )}
             <span className="group-count">{plural(g.rows.length, "site")}</span>
             {g.list && (
-              <button className="icon-btn danger" aria-label={`Delete list ${g.name}`} onClick={() => removeList(g.list!)}>
-                ×
-              </button>
+              <button className="icon-btn danger" aria-label={`Delete list ${g.name}`} onClick={() => removeList(g.list!)}><X /></button>
             )}
           </div>
           {g.rows.map(row)}
@@ -1278,15 +1265,13 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
   return (
     <div className="shell editor">
       <header className="editor-top">
-        <button className="icon-btn" onClick={back} aria-label="Back">‹</button>
+        <button className="icon-btn" onClick={back} aria-label="Back"><ChevronLeft /></button>
         <h1 className="site-title">
           {[site.clientName.trim(), site.address.trim()].filter(Boolean).join(" · ") || "New site"}
         </h1>
         <div className="menu-wrap">
           <button className="icon-btn" aria-label="Options" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
-            <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
-              <circle cx="2" cy="2" r="1.8" /><circle cx="9" cy="2" r="1.8" /><circle cx="16" cy="2" r="1.8" />
-            </svg>
+            <More />
           </button>
           {menu && (
             <>
@@ -1320,7 +1305,7 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
             <span className="row-btn-text">
               {site.emails.length ? site.emails.join(", ") : <span className="placeholder">Add emails</span>}
             </span>
-            <span className="chevron" aria-hidden="true">›</span>
+            <span className="chevron" aria-hidden="true"><ChevronRight /></span>
           </button>
         </div>
         <label className="field">
@@ -1342,7 +1327,7 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
                 v{d.templateVersion}{d.currentVersion !== d.templateVersion ? ` · template now v${d.currentVersion}` : ""} · {ago(d.createdAt)}
               </span>
             </span>
-            <button className="icon-btn danger" aria-label={`Remove ${d.templateName}`} onClick={() => undispatch(d)}>×</button>
+            <button className="icon-btn danger" aria-label={`Remove ${d.templateName}`} onClick={() => undispatch(d)}><X /></button>
           </div>
         ))}
         {site.dispatches.length === 0 && <p className="group-empty">Nothing dispatched to this site yet.</p>}
@@ -1409,7 +1394,7 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
     <div className="sheet">
       <div className="shell editor">
         <header className="editor-top">
-          <button className="icon-btn" onClick={() => onDone(list)} aria-label="Back">‹</button>
+          <button className="icon-btn" onClick={() => onDone(list)} aria-label="Back"><ChevronLeft /></button>
           <h1 className="site-title">Emails</h1>
           <span className="version">{list.length} / 10</span>
         </header>
@@ -1418,7 +1403,7 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
           {list.map((e) => (
             <div key={e} className="member-row dispatch-row">
               <span className="member-name email-name">{e}</span>
-              <button className="icon-btn danger" aria-label={`Remove ${e}`} onClick={() => setList(list.filter((x) => x !== e))}>×</button>
+              <button className="icon-btn danger" aria-label={`Remove ${e}`} onClick={() => setList(list.filter((x) => x !== e))}><X /></button>
             </div>
           ))}
           {list.length === 0 && <p className="group-empty">No emails yet. Add the people who should hear about this site.</p>}
@@ -1436,7 +1421,7 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
               onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), add())}
               aria-label="Email address"
             />
-            <button className="big-btn plus" onClick={add} aria-label="Add email">+</button>
+            <button className="big-btn plus" onClick={add} aria-label="Add email"><Plus /></button>
           </div>
         </section>
 
