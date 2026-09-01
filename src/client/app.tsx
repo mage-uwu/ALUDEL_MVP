@@ -6,6 +6,58 @@ import {
   type Template,
 } from "../shared/model";
 
+type Role = "owner" | "admin" | "member";
+
+interface Account {
+  id: string;
+  email: string;
+  name: string;
+  picture: string;
+}
+interface TeamRef {
+  id: string;
+  name: string;
+  role: Role;
+}
+interface Me {
+  user: Account;
+  teams: TeamRef[];
+}
+interface Member {
+  id: string;
+  email: string;
+  name: string;
+  picture: string;
+  role: Role;
+}
+interface Invite {
+  id: string;
+  email: string;
+  role: Role;
+  expiresAt: string;
+}
+
+class Unauthorized extends Error {}
+
+const signIn = (returnTo = location.pathname) => {
+  location.href = `/auth/login?return=${encodeURIComponent(returnTo)}`;
+};
+
+const remember = (key: string, value: string | null) => {
+  try {
+    value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value);
+  } catch {
+    /* storage can be unavailable; team choice just won't persist */
+  }
+};
+const recall = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
 interface Meta {
   id: string;
   name: string;
@@ -32,6 +84,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const short = path.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/i, (m) => `${m.slice(0, 8)}…`);
   termLog(`$ ${init?.method ?? "GET"} /api${short} → ${res.status}`);
+  if (res.status === 401) throw new Unauthorized("Sign in required");
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `Request failed (${res.status})`);
@@ -151,7 +204,56 @@ function useSortable(onMove: (from: number, to: number) => void) {
 }
 
 export default function App() {
+  const [me, setMe] = useState<Me | null | undefined>(undefined);
+  const [teamId, setTeamId] = useState<string | null>(() => recall("team"));
+  const [screen, setScreen] = useState<"templates" | "members">("templates");
   const [openId, setOpenId] = useState<string | null>(null);
+  const inviteToken = location.pathname.startsWith("/invite/")
+    ? location.pathname.slice("/invite/".length)
+    : null;
+
+  const load = () =>
+    api<Me>("/me").then(
+      (m) => {
+        setMe(m);
+        setTeamId((current) => {
+          const keep = m.teams.find((t) => t.id === current);
+          return (keep ?? m.teams[0])?.id ?? null;
+        });
+      },
+      (e) => setMe(e instanceof Unauthorized ? null : null)
+    );
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  useEffect(() => {
+    remember("team", teamId);
+  }, [teamId]);
+
+  const team = me?.teams.find((t) => t.id === teamId) ?? null;
+
+  const body = () => {
+    if (me === undefined) return <p className="empty">Loading…</p>;
+    if (inviteToken) return <AcceptInvite token={inviteToken} me={me} onDone={load} />;
+    if (me === null) return <SignIn />;
+    if (!team) return <NewTeam onCreated={load} />;
+    if (screen === "members")
+      return <Members team={team} me={me} onBack={() => setScreen("templates")} onChanged={load} />;
+    return openId ? (
+      <Editor teamId={team.id} id={openId} onBack={() => setOpenId(null)} />
+    ) : (
+      <Home
+        team={team}
+        me={me}
+        onOpen={setOpenId}
+        onMembers={() => setScreen("members")}
+        onSwitch={setTeamId}
+      />
+    );
+  };
+
   return (
     <div className="layout">
       <Terminal />
@@ -159,31 +261,156 @@ export default function App() {
           and the dark chassis carry it, no imitation hardware. */}
       <div className="device">
         <div className="screen">
-          <main className="pane">
-            {openId ? <Editor id={openId} onBack={() => setOpenId(null)} /> : <Home onOpen={setOpenId} />}
-          </main>
+          <main className="pane">{body()}</main>
         </div>
       </div>
     </div>
   );
 }
 
-function Home({ onOpen }: { onOpen: (id: string) => void }) {
+function SignIn() {
+  return (
+    <div className="shell gate">
+      <div className="gate-body">
+        <h1 className="brand">ALUDEL</h1>
+        <p className="gate-hint">Form templates for your team.</p>
+      </div>
+      <div className="dock">
+        <button className="big-btn primary" onClick={() => signIn()}>
+          Sign in with Google
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NewTeam({ onCreated }: { onCreated: () => void }) {
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const create = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api("/teams", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
+      onCreated();
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="shell gate">
+      <div className="gate-body">
+        <h1 className="gate-title">Name your team</h1>
+        <p className="gate-hint">Templates and members live inside a team. You can invite people next.</p>
+        <input
+          className="text-input"
+          value={name}
+          maxLength={80}
+          placeholder="Acme Pools"
+          autoFocus
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && create()}
+          aria-label="Team name"
+        />
+        {error && <p className="error">{error}</p>}
+      </div>
+      <div className="dock">
+        <button className="big-btn primary" disabled={!name.trim() || busy} onClick={create}>
+          Create team
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AcceptInvite({ token, me, onDone }: { token: string; me: Me | null; onDone: () => void }) {
+  const [state, setState] = useState<"ready" | "working" | "done">("ready");
+  const [error, setError] = useState("");
+  const [team, setTeam] = useState("");
+
+  const accept = async () => {
+    setState("working");
+    try {
+      const res = await api<{ team: { name: string } }>("/invites/accept", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      });
+      setTeam(res.team.name);
+      setState("done");
+      history.replaceState(null, "", "/");
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+      setState("ready");
+    }
+  };
+
+  return (
+    <div className="shell gate">
+      <div className="gate-body">
+        <h1 className="gate-title">{state === "done" ? `Welcome to ${team}` : "You have been invited"}</h1>
+        {state !== "done" && (
+          <p className="gate-hint">
+            {me
+              ? `Accepting as ${me.user.email}. Invites are tied to the address they were sent to.`
+              : "Sign in with the address the invite was sent to."}
+          </p>
+        )}
+        {error && <p className="error">{error}</p>}
+      </div>
+      <div className="dock">
+        {state === "done" ? (
+          <button className="big-btn primary" onClick={() => (location.href = "/")}>
+            Open templates
+          </button>
+        ) : me ? (
+          <button className="big-btn primary" disabled={state === "working"} onClick={accept}>
+            Accept invite
+          </button>
+        ) : (
+          <button className="big-btn primary" onClick={() => signIn(location.pathname)}>
+            Sign in with Google
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Home({
+  team,
+  me,
+  onOpen,
+  onMembers,
+  onSwitch,
+}: {
+  team: TeamRef;
+  me: Me;
+  onOpen: (id: string) => void;
+  onMembers: () => void;
+  onSwitch: (id: string) => void;
+}) {
   const [list, setList] = useState<Meta[] | null>(null);
   const [error, setError] = useState("");
+  const [menu, setMenu] = useState(false);
 
   useEffect(() => {
-    api<Meta[]>("/templates").then((xs) => {
+    setList(null);
+    api<Meta[]>(`/teams/${team.id}/templates`).then((xs) => {
       setList(xs);
       termDoc(
         [`templates (${xs.length})`, ...xs.map((t) => `  ${t.name}  v${t.version}`)].join("\n")
       );
     }, (e) => setError(e.message));
-  }, []);
+  }, [team.id]);
 
   const create = async () => {
     try {
-      const { id } = await api<{ id: string }>("/templates", {
+      const { id } = await api<{ id: string }>(`/teams/${team.id}/templates`, {
         method: "POST",
         body: JSON.stringify({ name: "Untitled template" }),
       });
@@ -196,8 +423,59 @@ function Home({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <div className="shell">
       <header className="home-head">
-        <h1>Templates</h1>
-        {list && list.length > 0 && <span className="count">{plural(list.length, "template")}</span>}
+        <div className="home-title">
+          <h1>Templates</h1>
+          <span className="team-name">{team.name}</span>
+        </div>
+        <div className="menu-wrap">
+          <button
+            className="icon-btn"
+            aria-label="Team menu"
+            aria-expanded={menu}
+            onClick={() => setMenu((m) => !m)}
+          >
+            <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
+              <circle cx="2" cy="2" r="1.8" />
+              <circle cx="9" cy="2" r="1.8" />
+              <circle cx="16" cy="2" r="1.8" />
+            </svg>
+          </button>
+          {menu && (
+            <>
+              <div className="menu-scrim" onClick={() => setMenu(false)} />
+              <div className="menu" role="menu">
+                <button className="menu-item" role="menuitem" onClick={() => { setMenu(false); onMembers(); }}>
+                  Members
+                </button>
+                {me.teams.length > 1 && (
+                  <>
+                    <p className="menu-label">Switch team</p>
+                    {me.teams.map((t) => (
+                      <button
+                        key={t.id}
+                        className={`menu-item${t.id === team.id ? " current" : ""}`}
+                        role="menuitem"
+                        onClick={() => { setMenu(false); onSwitch(t.id); }}
+                      >
+                        {t.name}
+                      </button>
+                    ))}
+                  </>
+                )}
+                <button
+                  className="menu-item"
+                  role="menuitem"
+                  onClick={async () => {
+                    await fetch("/auth/logout", { method: "POST" });
+                    location.href = "/";
+                  }}
+                >
+                  Sign out
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </header>
 
       {error && <p className="error">{error}</p>}
@@ -229,7 +507,7 @@ function Home({ onOpen }: { onOpen: (id: string) => void }) {
   );
 }
 
-function Editor({ id, onBack }: { id: string; onBack: () => void }) {
+function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: () => void }) {
   const [tpl, setTpl] = useState<Loaded | null>(null);
   const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
@@ -240,11 +518,11 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
   );
 
   useEffect(() => {
-    api<Loaded>(`/templates/${id}`).then((t) => {
+    api<Loaded>(`/teams/${teamId}/templates/${id}`).then((t) => {
       setTpl(t);
       setSaved(JSON.stringify({ name: t.name, tasks: t.tasks }));
     }, (e) => setError(e.message));
-  }, [id]);
+  }, [teamId, id]);
 
   useEffect(() => {
     if (tpl) termDoc(dumpTemplate(tpl));
@@ -272,7 +550,7 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
   const save = async () => {
     try {
       const body = { name: tpl.name, tasks: tpl.tasks };
-      const { version } = await api<{ version: number }>(`/templates/${id}`, {
+      const { version } = await api<{ version: number }>(`/teams/${teamId}/templates/${id}`, {
         method: "PUT",
         body: JSON.stringify(body),
       });
@@ -287,7 +565,7 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
   const remove = async () => {
     if (!confirm(`Delete "${tpl.name}" forever?`)) return;
     try {
-      await api(`/templates/${id}`, { method: "DELETE" });
+      await api(`/teams/${teamId}/templates/${id}`, { method: "DELETE" });
       onBack();
     } catch (e) {
       setError((e as Error).message);
@@ -505,5 +783,163 @@ function RowControls({
       <button className="icon-btn handle" aria-label="Drag to reorder" onPointerDown={onHandleDown}>⠿</button>
       <button className="icon-btn danger" aria-label="Remove" onClick={onRemove}>×</button>
     </span>
+  );
+}
+
+function Members({
+  team,
+  me,
+  onBack,
+  onChanged,
+}: {
+  team: TeamRef;
+  me: Me;
+  onBack: () => void;
+  onChanged: () => void;
+}) {
+  const [members, setMembers] = useState<Member[] | null>(null);
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"member" | "admin">("member");
+  const [link, setLink] = useState("");
+  const [error, setError] = useState("");
+  const admin = team.role === "owner" || team.role === "admin";
+  const onlyOwner = (m: Member) =>
+    m.role === "owner" && (members ?? []).filter((x) => x.role === "owner").length <= 1;
+
+  const load = () => {
+    api<Member[]>(`/teams/${team.id}/members`).then(setMembers, (e) => setError(e.message));
+    if (admin) api<Invite[]>(`/teams/${team.id}/invites`).then(setInvites, () => setInvites([]));
+  };
+  useEffect(load, [team.id]);
+
+  const guard = (fn: () => Promise<unknown>) => async () => {
+    setError("");
+    try {
+      await fn();
+      load();
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const invite = guard(async () => {
+    const res = await api<{ token: string }>(`/teams/${team.id}/invites`, {
+      method: "POST",
+      body: JSON.stringify({ email, role }),
+    });
+    setLink(`${location.origin}/invite/${res.token}`);
+    setEmail("");
+  });
+
+  return (
+    <div className="shell">
+      <header className="editor-top">
+        <button className="icon-btn" onClick={onBack} aria-label="Back">‹</button>
+        <span className="head-title">Members</span>
+        <span className="version">{team.role}</span>
+      </header>
+
+      {error && <p className="error">{error}</p>}
+
+      {members?.map((m) => (
+        <div key={m.id} className="card glass-frosted member-row">
+          <span className="template-text">
+            <span className="member-name">{m.name || m.email}</span>
+            <span className="template-meta">{m.email}</span>
+          </span>
+          {team.role === "owner" && m.id !== me.user.id ? (
+            <select
+              className="role-select"
+              value={m.role}
+              aria-label={`Role for ${m.email}`}
+              onChange={(e) =>
+                guard(() =>
+                  api(`/teams/${team.id}/members/${m.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ role: e.target.value }),
+                  })
+                )()
+              }
+            >
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+              <option value="owner">owner</option>
+            </select>
+          ) : (
+            <span className="version">{m.role}</span>
+          )}
+          {(admin || m.id === me.user.id) && !onlyOwner(m) && (
+            <button
+              className="icon-btn danger"
+              aria-label={m.id === me.user.id ? "Leave team" : `Remove ${m.email}`}
+              onClick={() => {
+                const self = m.id === me.user.id;
+                if (!confirm(self ? `Leave ${team.name}?` : `Remove ${m.email} from ${team.name}?`)) return;
+                guard(async () => {
+                  await api(`/teams/${team.id}/members/${m.id}`, { method: "DELETE" });
+                  if (self) location.href = "/";
+                })();
+              }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      ))}
+
+      {admin && (
+        <section className="card glass-frosted invite-box">
+          <p className="section-label">Invite someone</p>
+          <input
+            className="text-input"
+            type="email"
+            value={email}
+            placeholder="name@company.com"
+            maxLength={160}
+            onChange={(e) => setEmail(e.target.value)}
+            aria-label="Invite email"
+          />
+          <div className="invite-row">
+            <select
+              className="role-select"
+              value={role}
+              onChange={(e) => setRole(e.target.value as "member" | "admin")}
+              aria-label="Invite role"
+            >
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+            </select>
+            <button className="big-btn" disabled={!email.trim()} onClick={invite}>
+              Send invite
+            </button>
+          </div>
+          {link && (
+            <div className="invite-link">
+              <p className="template-meta">Share this link — it works once, for that address only.</p>
+              <input className="text-input" readOnly value={link} onFocus={(e) => e.target.select()} />
+            </div>
+          )}
+          {invites.map((i) => (
+            <div key={i.id} className="pending">
+              <span className="template-text">
+                <span className="member-name">{i.email}</span>
+                <span className="template-meta">invited as {i.role}</span>
+              </span>
+              <button
+                className="icon-btn danger"
+                aria-label={`Revoke invite for ${i.email}`}
+                onClick={guard(() =>
+                  api(`/teams/${team.id}/invites/${encodeURIComponent(i.id)}`, { method: "DELETE" })
+                )}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+    </div>
   );
 }
