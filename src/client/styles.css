@@ -343,29 +343,10 @@ body {
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
-.menu-item.current { color: var(--muted); }
-
-/* section switcher: a glass rail with a ceramic active segment */
-.seg { display: inline-flex; gap: 4px; padding: 4px; border-radius: 999px; width: fit-content; }
-.seg-btn {
-  min-height: 40px;
-  padding: 0 16px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
-  font: inherit;
-  font-size: 17px;
-  font-weight: 900;
-  letter-spacing: -0.01em;
-  color: var(--muted);
-  cursor: pointer;
-}
-.seg-btn.active {
-  background: var(--ceramic);
-  border-color: var(--ceramic-border);
-  color: var(--ink);
-  box-shadow: inset 0 1px 0 #fff, 0 6px 14px -8px rgba(28, 32, 38, 0.4);
-}
+.menu-item.current { color: var(--ink); }
+.menu-item { display: flex; align-items: center; justify-content: space-between; }
+.tick { color: var(--muted); font-size: 14px; }
+.menu-sep { height: 1px; margin: 6px 8px; background: rgba(28, 32, 38, 0.08); }
 
 /* sites */
 .group { display: flex; flex-direction: column; gap: 10px; }

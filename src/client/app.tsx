@@ -454,24 +454,13 @@ function HomeHeader({
     <header className="home-head">
       <Logo size={30} className="home-mark" />
       <div className="home-title">
-        <nav className="seg glass-pane" aria-label="Section">
-          {(["templates", "sites"] as const).map((sec) => (
-            <button
-              key={sec}
-              className={`seg-btn${section === sec ? " active" : ""}`}
-              aria-current={section === sec ? "page" : undefined}
-              onClick={() => onSection(sec)}
-            >
-              {sec === "templates" ? "Templates" : "Sites"}
-            </button>
-          ))}
-        </nav>
+        <h1>{section === "sites" ? "Sites" : "Templates"}</h1>
         <span className="team-name">{team.name}</span>
       </div>
       <div className="menu-wrap">
         <button
           className="icon-btn"
-          aria-label="Team menu"
+          aria-label="Menu"
           aria-expanded={menu}
           onClick={() => setMenu((m) => !m)}
         >
@@ -485,6 +474,19 @@ function HomeHeader({
           <>
             <div className="menu-scrim" onClick={() => setMenu(false)} />
             <div className="menu" role="menu">
+              {(["templates", "sites"] as const).map((sec) => (
+                <button
+                  key={sec}
+                  className={`menu-item${section === sec ? " current" : ""}`}
+                  role="menuitemradio"
+                  aria-checked={section === sec}
+                  onClick={() => { setMenu(false); onSection(sec); }}
+                >
+                  {sec === "templates" ? "Templates" : "Sites"}
+                  {section === sec && <span className="tick" aria-hidden="true">✓</span>}
+                </button>
+              ))}
+              <div className="menu-sep" />
               <button className="menu-item" role="menuitem" onClick={() => { setMenu(false); onMembers(); }}>
                 Members
               </button>
@@ -503,6 +505,7 @@ function HomeHeader({
                   ))}
                 </>
               )}
+              <div className="menu-sep" />
               <button
                 className="menu-item"
                 role="menuitem"
