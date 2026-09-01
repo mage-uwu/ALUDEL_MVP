@@ -66,7 +66,7 @@ const TABLES = [
      list_id TEXT REFERENCES lists(id) ON DELETE SET NULL,
      client_name TEXT NOT NULL,
      address TEXT NOT NULL DEFAULT '',
-     phone TEXT NOT NULL DEFAULT '',
+     emails TEXT NOT NULL DEFAULT '[]',
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
    )`,
@@ -110,12 +110,13 @@ export function ensureSchema(db: D1Database): Promise<unknown> {
     await db.batch(TABLES.map((sql) => db.prepare(sql)));
     // databases created before tenancy existed still need the column, and it
     // has to land before anything indexes it
-    await db
-      .prepare("ALTER TABLE templates ADD COLUMN team_id TEXT")
-      .run()
-      .catch((e) => {
+    const addColumn = (sql: string) =>
+      db.prepare(sql).run().catch((e) => {
         if (!/duplicate column/i.test(String(e))) throw e;
       });
+    await addColumn("ALTER TABLE templates ADD COLUMN team_id TEXT");
+    // sites created before emails replaced phone
+    await addColumn("ALTER TABLE sites ADD COLUMN emails TEXT NOT NULL DEFAULT '[]'");
     await db.batch(INDEXES.map((sql) => db.prepare(sql)));
   })()).catch((e) => {
     ready = null;

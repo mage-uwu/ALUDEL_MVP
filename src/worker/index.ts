@@ -55,6 +55,28 @@ const field = (v: unknown, max: number): string =>
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Up to 10 valid, lower-cased, de-duplicated addresses; anything else is dropped. */
+const emailsOf = (v: unknown): string[] => {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const x of v) {
+    if (typeof x !== "string") continue;
+    const e = x.trim().toLowerCase();
+    if (e.length <= 160 && EMAIL.test(e) && !out.includes(e)) out.push(e);
+    if (out.length >= 10) break;
+  }
+  return out;
+};
+
+const parseEmails = (raw: unknown): string[] => {
+  try {
+    const v = JSON.parse(typeof raw === "string" ? raw : "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+};
+
 const starterDoc = () => ({
   tasks: [
     {
@@ -203,7 +225,7 @@ async function teamRoutes(
   if (rest === "/sites") {
     if (req.method === "GET") {
       const { results } = await env.DB.prepare(
-        `SELECT s.id, s.client_name AS clientName, s.address, s.phone,
+        `SELECT s.id, s.client_name AS clientName, s.address, s.emails,
                 s.list_id AS listId, l.name AS listName,
                 (SELECT COUNT(*) FROM dispatches d WHERE d.site_id = s.id) AS dispatches
          FROM sites s LEFT JOIN lists l ON l.id = s.list_id
@@ -212,7 +234,7 @@ async function teamRoutes(
       )
         .bind(teamId)
         .all();
-      return json(results);
+      return json(results.map((r) => ({ ...r, emails: parseEmails(r.emails) })));
     }
     if (req.method === "POST") {
       const body = await readBody(req);
@@ -221,7 +243,7 @@ async function teamRoutes(
       if (listId === undefined) return error(422, "Unknown list");
       const id = crypto.randomUUID();
       await env.DB.prepare(
-        `INSERT INTO sites (id, team_id, list_id, client_name, address, phone, created_at, updated_at)
+        `INSERT INTO sites (id, team_id, list_id, client_name, address, emails, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
@@ -230,7 +252,7 @@ async function teamRoutes(
           listId,
           clientName,
           field(body?.address, 240),
-          field(body?.phone, 40),
+          JSON.stringify(emailsOf(body?.emails)),
           nowIso(),
           nowIso()
         )
@@ -254,11 +276,11 @@ async function teamRoutes(
 
     if (!onDispatches && req.method === "GET") {
       const row = await env.DB.prepare(
-        `SELECT id, client_name AS clientName, address, phone, list_id AS listId
+        `SELECT id, client_name AS clientName, address, emails, list_id AS listId
          FROM sites WHERE id = ?`
       )
         .bind(siteId)
-        .first();
+        .first<{ emails: string }>();
       const { results: dispatches } = await env.DB.prepare(
         `SELECT d.id, d.template_id AS templateId, t.name AS templateName,
                 d.template_version AS templateVersion, t.version AS currentVersion,
@@ -268,7 +290,7 @@ async function teamRoutes(
       )
         .bind(siteId)
         .all();
-      return json({ ...row, dispatches });
+      return json({ ...row, emails: parseEmails(row?.emails), dispatches });
     }
 
     if (!onDispatches && req.method === "PATCH") {
@@ -279,10 +301,10 @@ async function teamRoutes(
       const listId = await listFor(body.listId);
       if (listId === undefined) return error(422, "Unknown list");
       await env.DB.prepare(
-        `UPDATE sites SET client_name = ?, address = ?, phone = ?, list_id = ?, updated_at = ?
+        `UPDATE sites SET client_name = ?, address = ?, emails = ?, list_id = ?, updated_at = ?
          WHERE id = ?`
       )
-        .bind(clientName, field(body.address, 240), field(body.phone, 40), listId, nowIso(), siteId)
+        .bind(clientName, field(body.address, 240), JSON.stringify(emailsOf(body.emails)), listId, nowIso(), siteId)
         .run();
       return json({ ok: true });
     }

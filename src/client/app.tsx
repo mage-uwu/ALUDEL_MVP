@@ -49,7 +49,7 @@ interface SiteRow {
   id: string;
   clientName: string;
   address: string;
-  phone: string;
+  emails: string[];
   listId: string | null;
   listName: string | null;
   dispatches: number;
@@ -66,7 +66,7 @@ interface SiteDoc {
   id: string;
   clientName: string;
   address: string;
-  phone: string;
+  emails: string[];
   listId: string | null;
   dispatches: Dispatch[];
 }
@@ -1118,7 +1118,9 @@ function Sites({
       <span className="template-text">
         <span className="template-name">{x.clientName}</span>
         <span className="template-meta">
-          {[x.address, x.phone].filter(Boolean).join(" · ") || "No address yet"}
+          {[x.address, x.emails[0] && (x.emails.length > 1 ? `${x.emails[0]} +${x.emails.length - 1}` : x.emails[0])]
+            .filter(Boolean)
+            .join(" · ") || "No address yet"}
         </span>
       </span>
       {x.dispatches > 0 && <span className="version">{x.dispatches} ⇢</span>}
@@ -1190,7 +1192,8 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
   const [menu, setMenu] = useState(false);
   const [picker, setPicker] = useState(false);
 
-  const fields = (x: SiteDoc) => ({ clientName: x.clientName, address: x.address, phone: x.phone, listId: x.listId });
+  const [draft, setDraft] = useState("");
+  const fields = (x: SiteDoc) => ({ clientName: x.clientName, address: x.address, emails: x.emails, listId: x.listId });
   const dirty = useMemo(() => !!site && JSON.stringify(fields(site)) !== saved, [site, saved]);
 
   const load = () =>
@@ -1212,7 +1215,7 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
       [
         `site "${site.clientName}"`,
         `  ${site.address || "—"}`,
-        `  ${site.phone || "—"}  ·  ${listName}`,
+        `  ${site.emails.join(", ") || "—"}  ·  ${listName}`,
         ``,
         ...(site.dispatches.length
           ? site.dispatches.map((d) => `  ⇢ "${d.templateName}"  v${d.templateVersion}`)
@@ -1224,6 +1227,17 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
   if (!site) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
 
   const patch = (p: Partial<SiteDoc>) => setSite((s) => s && { ...s, ...p });
+
+  // Enter, comma or leaving the box commits a valid address; invalid text stays put
+  const addEmail = () => {
+    const e = draft.trim().toLowerCase();
+    if (!e) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return setError("That doesn't look like an email address");
+    if (site.emails.length >= 10) return setError("Up to 10 emails per site");
+    setError("");
+    setDraft("");
+    if (!site.emails.includes(e)) patch({ emails: [...site.emails, e] });
+  };
 
   const save = async () => {
     try {
@@ -1276,13 +1290,9 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
     <div className="shell editor">
       <header className="editor-top">
         <button className="icon-btn" onClick={back} aria-label="Back">‹</button>
-        <input
-          className="title-input"
-          value={site.clientName}
-          maxLength={80}
-          onChange={(e) => patch({ clientName: e.target.value })}
-          aria-label="Client name"
-        />
+        <h1 className="site-title">
+          {[site.clientName.trim(), site.address.trim()].filter(Boolean).join(" · ") || "New site"}
+        </h1>
         <div className="menu-wrap">
           <button className="icon-btn" aria-label="Options" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
             <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
@@ -1306,15 +1316,42 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
 
       <section className="card glass-frosted task">
         <label className="field">
+          <span className="section-label">Client name</span>
+          <input className="text-input left" value={site.clientName} maxLength={80} placeholder="Smith residence"
+            onChange={(e) => patch({ clientName: e.target.value })} />
+        </label>
+        <label className="field">
           <span className="section-label">Address</span>
           <input className="text-input left" value={site.address} maxLength={240} placeholder="12 Lakeview Dr"
             onChange={(e) => patch({ address: e.target.value })} />
         </label>
-        <label className="field">
-          <span className="section-label">Phone</span>
-          <input className="text-input left" type="tel" value={site.phone} maxLength={40} placeholder="(555) 010-2030"
-            onChange={(e) => patch({ phone: e.target.value })} />
-        </label>
+        <div className="field">
+          <span className="section-label">Emails</span>
+          {site.emails.length > 0 && (
+            <div className="chips">
+              {site.emails.map((e) => (
+                <span key={e} className="chip">
+                  {e}
+                  <button className="chip-x" aria-label={`Remove ${e}`}
+                    onClick={() => patch({ emails: site.emails.filter((x) => x !== e) })}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
+          <input
+            className="text-input left"
+            type="email"
+            inputMode="email"
+            autoCapitalize="none"
+            value={draft}
+            placeholder={site.emails.length ? "Add another" : "name@example.com"}
+            maxLength={160}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => (e.key === "Enter" || e.key === ",") && (e.preventDefault(), addEmail())}
+            onBlur={addEmail}
+            aria-label="Add email"
+          />
+        </div>
         <label className="field">
           <span className="section-label">List</span>
           <select className="role-select wide" value={site.listId ?? ""} onChange={(e) => patch({ listId: e.target.value || null })}>
