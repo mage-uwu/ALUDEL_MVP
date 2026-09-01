@@ -157,16 +157,6 @@ export default function App() {
   );
 }
 
-function Tabs() {
-  return (
-    <nav className="tabs glass-pane">
-      <button className="tab active">Templates</button>
-      <button className="tab" disabled title="Next pass">Sites</button>
-      <button className="tab" disabled title="Next pass">Ledger</button>
-    </nav>
-  );
-}
-
 function Home({ onOpen }: { onOpen: (id: string) => void }) {
   const [list, setList] = useState<Meta[] | null>(null);
   const [error, setError] = useState("");
@@ -194,7 +184,6 @@ function Home({ onOpen }: { onOpen: (id: string) => void }) {
 
   return (
     <div className="shell">
-      <Tabs />
       {error && <p className="error">{error}</p>}
       {list?.map((t) => (
         <button key={t.id} className="card glass-frosted template-card" onClick={() => onOpen(t.id)}>
