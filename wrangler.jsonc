@@ -13,8 +13,7 @@
     {
       "binding": "DB",
       "database_name": "aludel",
-      // Replace with the id from: wrangler d1 create aludel
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+      "database_id": "d67a9e14-6c21-42eb-95c8-938f40e63563"
     }
   ],
   "observability": { "enabled": true }
