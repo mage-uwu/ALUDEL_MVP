@@ -20,6 +20,8 @@ export interface Env {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   APP_ORIGIN?: string;
+  /** Optional comma-separated domain allow-list, e.g. "acme.com,acme.co.uk". */
+  ALLOWED_EMAIL_DOMAINS?: string;
 }
 
 const HEADERS = {

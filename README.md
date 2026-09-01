@@ -39,6 +39,21 @@ wrangler secret put GOOGLE_CLIENT_SECRET
 For local development put the same two keys in `.dev.vars` (gitignored). If the Worker is
 served on a different origin than the request host, set `APP_ORIGIN` as a var.
 
+### Who may sign in
+
+A Google client of type **External** lets any Google account reach the callback, so
+authentication is not by itself a gate. Set `ALLOWED_EMAIL_DOMAINS` (a plain var, not a
+secret) to restrict it:
+
+```
+ALLOWED_EMAIL_DOMAINS = "acme.com,acme.co.uk"
+```
+
+Sign-in then requires either an address on one of those domains, or a live invite for that
+exact address — so contractors on other domains still work without opening the door. Leave
+it unset and any Google account may sign in; they land in their own empty team and can
+never see yours, but the account and team rows are theirs to create.
+
 ## Develop
 
 ```sh

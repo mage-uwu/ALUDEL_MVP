@@ -73,6 +73,29 @@ export function sameOrigin(req: Request, env: Env): boolean {
   return !!o && o === origin(req, env);
 }
 
+/**
+ * With an "External" Google client any Google account on earth can reach the
+ * callback, so authentication alone is not a gate. When ALLOWED_EMAIL_DOMAINS
+ * is set, only those domains may sign in — plus anyone holding a live invite,
+ * so contractors on other domains still work without opening the door.
+ */
+export async function canSignIn(db: D1Database, allowList: string, email: string): Promise<boolean> {
+  const domains = allowList
+    .split(",")
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
+    .filter(Boolean);
+  if (domains.length === 0) return true; // unset: any Google account may sign in
+
+  const domain = email.slice(email.lastIndexOf("@") + 1);
+  if (domains.includes(domain)) return true;
+
+  const invited = await db
+    .prepare("SELECT 1 AS hit FROM invites WHERE email = ? AND accepted_at IS NULL AND expires_at > ?")
+    .bind(email, iso(now()))
+    .first();
+  return !!invited;
+}
+
 // ————— OAuth: authorization code + PKCE, with state and nonce —————
 
 export async function startLogin(req: Request, env: Env): Promise<Response> {
@@ -198,6 +221,9 @@ export async function finishLogin(req: Request, env: Env): Promise<Response> {
   if (!claims.email || claims.email_verified !== true) return fail("unverified email");
 
   const email = claims.email.toLowerCase();
+  if (!(await canSignIn(env.DB, env.ALLOWED_EMAIL_DOMAINS ?? "", email)))
+    return fail("this account is not allowed to sign in");
+
   const userId = crypto.randomUUID();
   const user = await env.DB.prepare(
     `INSERT INTO users (id, google_sub, email, name, picture, created_at)
