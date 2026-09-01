@@ -365,8 +365,16 @@ body {
   outline: none;
   border-radius: 8px;
 }
-.group-name:focus { background: rgba(255, 255, 255, 0.55); }
 .group-name.muted { color: var(--muted); }
+
+/* list picker rows */
+.pick-row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.pick-row .radio { width: 20px; display: inline-flex; justify-content: center; color: var(--ink); flex: none; }
+.pick-row .pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-row:not(.picked) .pick-name { font-weight: 700; }
+.modal-actions { display: flex; gap: 8px; }
+.modal-actions .big-btn { flex: 1; min-height: 50px; font-size: 14px; }
+.big-btn.danger { color: #b3261e; }
 .group-count { color: var(--muted); font-size: 12px; font-weight: 700; }
 .group-empty { margin: 0; padding: 4px 6px; color: var(--muted); font-size: 13px; }
 .field { display: flex; flex-direction: column; gap: 6px; }

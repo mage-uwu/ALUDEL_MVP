@@ -40,3 +40,6 @@ export const Grip = ({ size = 18 }: { size?: number }) => (
     <circle cx="7" cy="15.5" r="1.8" /><circle cx="13" cy="15.5" r="1.8" />
   </Svg>
 );
+export const Pencil = ({ size = 16 }: { size?: number }) => (
+  <Svg size={size}><path d="M4 16v-3.2L13.3 3.5l3.2 3.2L7.2 16H4z" /><path d="M11.5 5.3l3.2 3.2" /></Svg>
+);

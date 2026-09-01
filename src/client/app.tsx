@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Logo } from "./logo";
-import { Check, ChevronLeft, ChevronRight, Grip, More, Plus, X } from "./icons";
+import { Check, ChevronLeft, ChevronRight, Grip, More, Pencil, Plus, X } from "./icons";
 import {
   type Block,
   type BlockKind,
@@ -1029,15 +1029,12 @@ function Sites({
   const [lists, setLists] = useState<ListRef[] | null>(null);
   const [sites, setSites] = useState<SiteRow[] | null>(null);
   const [error, setError] = useState("");
-  // names as the server last gave them; local edits live in `lists` until saved
-  const savedNames = useRef<Record<string, string>>({});
 
   const load = () => {
     Promise.all([
       api<ListRef[]>(`/teams/${team.id}/lists`),
       api<SiteRow[]>(`/teams/${team.id}/sites`),
     ]).then(([ls, ss]) => {
-      savedNames.current = Object.fromEntries(ls.map((l) => [l.id, l.name]));
       setLists(ls);
       setSites(ss);
       termDoc(
@@ -1060,37 +1057,6 @@ function Sites({
         body: JSON.stringify({ clientName: "New site" }),
       });
       onOpen(id);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  // lists are created like everything else here: one tap, then rename in place
-  const addList = async () => {
-    try {
-      await api(`/teams/${team.id}/lists`, { method: "POST", body: JSON.stringify({ name: "New list" }) });
-      load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  const renameList = async (l: ListRef, name: string) => {
-    const next = name.trim();
-    if (!next || next === savedNames.current[l.id]) return load();
-    try {
-      await api(`/teams/${team.id}/lists/${l.id}`, { method: "PATCH", body: JSON.stringify({ name: next }) });
-      load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  const removeList = async (l: ListRef) => {
-    if (!confirm(`Delete list "${l.name}"? Its ${plural(l.sites, "site")} will stay, unlisted.`)) return;
-    try {
-      await api(`/teams/${team.id}/lists/${l.id}`, { method: "DELETE" });
-      load();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1125,25 +1091,8 @@ function Sites({
       {groups.map((g) => (
         <section key={g.key} className="group">
           <div className="group-head">
-            {g.list ? (
-              <input
-                className="group-name"
-                value={g.name}
-                maxLength={80}
-                aria-label="List name"
-                onChange={(e) =>
-                  setLists((ls) => ls && ls.map((l) => (l.id === g.key ? { ...l, name: e.target.value } : l)))
-                }
-                onBlur={(e) => renameList(g.list!, e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-              />
-            ) : (
-              <span className="group-name muted">{g.name}</span>
-            )}
+            <span className={`group-name${g.list ? "" : " muted"}`}>{g.name}</span>
             <span className="group-count">{plural(g.rows.length, "site")}</span>
-            {g.list && (
-              <button className="icon-btn danger" aria-label={`Delete list ${g.name}`} onClick={() => removeList(g.list!)}><X /></button>
-            )}
           </div>
           {g.rows.map(row)}
           {g.rows.length === 0 && <p className="group-empty">No sites in this list yet.</p>}
@@ -1153,13 +1102,7 @@ function Sites({
       {sites?.length === 0 && lists?.length === 0 && (
         <div className="empty">
           <p className="empty-title">No sites yet</p>
-          <p className="empty-hint">A site is a client, an address and a phone. Lists group them; templates get dispatched to them.</p>
-        </div>
-      )}
-
-      {lists && (
-        <div className="add-row">
-          <button onClick={addList}>+ New list</button>
+          <p className="empty-hint">A site is a client, an address and who to email. Put sites in lists from inside the site; dispatch templates to them.</p>
         </div>
       )}
 
@@ -1180,6 +1123,7 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
   const [picker, setPicker] = useState(false);
 
   const [wizard, setWizard] = useState(false);
+  const [listSheet, setListSheet] = useState(false);
   const fields = (x: SiteDoc) => ({ clientName: x.clientName, address: x.address, emails: x.emails, listId: x.listId });
   const dirty = useMemo(() => !!site && JSON.stringify(fields(site)) !== saved, [site, saved]);
 
@@ -1308,13 +1252,15 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
             <span className="chevron" aria-hidden="true"><ChevronRight /></span>
           </button>
         </div>
-        <label className="field">
+        <div className="field">
           <span className="section-label">List</span>
-          <select className="role-select wide" value={site.listId ?? ""} onChange={(e) => patch({ listId: e.target.value || null })}>
-            <option value="">Unlisted</option>
-            {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-        </label>
+          <button className="row-btn" onClick={() => setListSheet(true)} aria-label="Choose list">
+            <span className="row-btn-text">
+              {lists.find((l) => l.id === site.listId)?.name ?? <span className="placeholder">Unlisted</span>}
+            </span>
+            <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+          </button>
+        </div>
       </section>
 
       <section className="card glass-frosted task">
@@ -1367,6 +1313,178 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
           }}
         />
       )}
+
+      {listSheet && (
+        <ListSheet
+          teamId={teamId}
+          lists={lists}
+          selected={site.listId}
+          onLists={setLists}
+          onDone={(listId) => {
+            patch({ listId });
+            setListSheet(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Fullscreen picker for a site's list. Lists themselves are team objects, so
+ * creating, renaming and deleting them saves immediately; which one the site
+ * sits in is staged like every other field and lands on Save site.
+ */
+function ListSheet({
+  teamId,
+  lists,
+  selected,
+  onLists,
+  onDone,
+}: {
+  teamId: string;
+  lists: ListRef[];
+  selected: string | null;
+  onLists: (lists: ListRef[]) => void;
+  onDone: (listId: string | null) => void;
+}) {
+  const [sel, setSel] = useState<string | null>(selected);
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [alert, setAlert] = useState<{ title: string; message: string; action?: { label: string; onClick: () => void } } | null>(null);
+  const alertOpen = useRef(false);
+  alertOpen.current = alert !== null;
+
+  const oops = (e: unknown) => setAlert({ title: "That didn't save", message: (e as Error).message });
+  const taken = (name: string, ignore: string | null) =>
+    lists.some((l) => l.id !== ignore && l.name.toLowerCase() === name.toLowerCase());
+
+  const create = async () => {
+    const name = draft.trim();
+    if (!name) return;
+    if (taken(name, null)) return setAlert({ title: "Already a list", message: `There is already a list called “${name}”.` });
+    try {
+      const made = await api<ListRef>(`/teams/${teamId}/lists`, { method: "POST", body: JSON.stringify({ name }) });
+      onLists([...lists, made]);
+      setSel(made.id);
+      setDraft("");
+    } catch (e) {
+      oops(e);
+    }
+  };
+
+  const commitEdit = async () => {
+    if (editing === null) return;
+    const name = editDraft.trim();
+    if (!name) return setAlert({ title: "Name required", message: "A list needs a name." });
+    if (taken(name, editing)) return setAlert({ title: "Already a list", message: `There is already a list called “${name}”.` });
+    try {
+      await api(`/teams/${teamId}/lists/${editing}`, { method: "PATCH", body: JSON.stringify({ name }) });
+      onLists(lists.map((l) => (l.id === editing ? { ...l, name } : l)));
+      setEditing(null);
+    } catch (e) {
+      oops(e);
+    }
+  };
+  const cancelEdit = () => {
+    if (!alertOpen.current) setEditing(null);
+  };
+
+  const remove = (l: ListRef) =>
+    setAlert({
+      title: `Delete “${l.name}”?`,
+      message: l.sites ? `Its ${plural(l.sites, "site")} will stay, unlisted.` : "This list is empty.",
+      action: {
+        label: "Delete",
+        onClick: async () => {
+          setAlert(null);
+          try {
+            await api(`/teams/${teamId}/lists/${l.id}`, { method: "DELETE" });
+            onLists(lists.filter((x) => x.id !== l.id));
+            if (sel === l.id) setSel(null);
+          } catch (e) {
+            oops(e);
+          }
+        },
+      },
+    });
+
+  const row = (id: string | null, name: string, l?: ListRef) =>
+    editing !== null && editing === id ? (
+      <div key={id ?? "none"} className="member-row dispatch-row">
+        <input
+          className="text-input left"
+          autoFocus
+          value={editDraft}
+          maxLength={80}
+          onChange={(ev) => setEditDraft(ev.target.value)}
+          onKeyDown={(ev) => {
+            if (ev.key === "Enter") (ev.preventDefault(), commitEdit());
+            if (ev.key === "Escape") setEditing(null);
+          }}
+          onBlur={cancelEdit}
+          aria-label={`Rename ${name}`}
+        />
+        <button className="icon-btn" aria-label="Save name" onPointerDown={(ev) => ev.preventDefault()} onClick={commitEdit}>
+          <Check size={18} />
+        </button>
+      </div>
+    ) : (
+      <div key={id ?? "none"} className="member-row dispatch-row">
+        <button
+          className={`email-name pick-row${sel === id ? " picked" : ""}`}
+          role="radio"
+          aria-checked={sel === id}
+          onClick={() => setSel(id)}
+        >
+          <span className="radio" aria-hidden="true">{sel === id && <Check size={16} />}</span>
+          <span className="pick-name">{name}</span>
+          {l && <span className="template-meta">{plural(l.sites, "site")}</span>}
+        </button>
+        {l && (
+          <>
+            <button className="icon-btn" aria-label={`Rename ${name}`} onClick={() => { setEditing(l.id); setEditDraft(l.name); }}>
+              <Pencil />
+            </button>
+            <button className="icon-btn danger" aria-label={`Delete ${name}`} onClick={() => remove(l)}><X /></button>
+          </>
+        )}
+      </div>
+    );
+
+  return (
+    <div className="sheet">
+      <div className="shell editor">
+        <header className="editor-top">
+          <button className="icon-btn" onClick={() => onDone(sel)} aria-label="Back"><ChevronLeft /></button>
+          <h1 className="site-title">List</h1>
+          <span className="version">{plural(lists.length, "list")}</span>
+        </header>
+
+        <section className="card glass-frosted task" role="radiogroup" aria-label="List">
+          {row(null, "Unlisted")}
+          {lists.map((l) => row(l.id, l.name, l))}
+          <div className="add-email">
+            <input
+              className="text-input left"
+              value={draft}
+              placeholder="New list"
+              maxLength={80}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), create())}
+              aria-label="New list name"
+            />
+            <button className="big-btn plus" onClick={create} aria-label="Add list"><Plus /></button>
+          </div>
+        </section>
+
+        <div className="dock">
+          <button className="big-btn primary" onClick={() => onDone(sel)}>Done</button>
+        </div>
+      </div>
+
+      {alert && <Modal title={alert.title} message={alert.message} action={alert.action} onClose={() => setAlert(null)} />}
     </div>
   );
 }
@@ -1496,13 +1614,31 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
   );
 }
 
-function Modal({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
+function Modal({
+  title,
+  message,
+  onClose,
+  action,
+}: {
+  title: string;
+  message: string;
+  onClose: () => void;
+  /** A second, committing choice; without it the modal is a plain acknowledgement. */
+  action?: { label: string; onClick: () => void };
+}) {
   return (
     <div className="modal-scrim" onClick={onClose} onPointerDown={(e) => e.preventDefault()}>
       <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby="modal-title" onClick={(e) => e.stopPropagation()}>
         <p id="modal-title" className="modal-title">{title}</p>
         <p className="modal-msg">{message}</p>
-        <button className="big-btn" onClick={onClose}>OK</button>
+        {action ? (
+          <div className="modal-actions">
+            <button className="big-btn" onClick={onClose}>Cancel</button>
+            <button className="big-btn danger" onClick={action.onClick}>{action.label}</button>
+          </div>
+        ) : (
+          <button className="big-btn" onClick={onClose}>OK</button>
+        )}
       </div>
     </div>
   );
