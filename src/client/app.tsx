@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   EVERY_WEEKS,
   WINDOW_DAYS,
@@ -21,11 +21,72 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "content-type": "application/json" },
     ...init,
   });
+  termLog(`$ ${init?.method ?? "GET"} /api${path} → ${res.status}`);
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `Request failed (${res.status})`);
   }
   return res.json() as Promise<T>;
+}
+
+// Wide-screen console pane: a tiny external store the Terminal subscribes to.
+const term = { lines: [] as string[], doc: "", subs: new Set<() => void>() };
+const termLog = (line: string) => {
+  term.lines = [...term.lines.slice(-39), line];
+  term.subs.forEach((f) => f());
+};
+const termDoc = (doc: string) => {
+  term.doc = doc;
+  term.subs.forEach((f) => f());
+};
+
+const dumpTemplate = (t: Loaded): string =>
+  [
+    `template "${t.name}"  v${t.version}`,
+    ...t.tasks.flatMap((k) => [
+      ``,
+      `  task "${k.name}"  every ${k.everyWeeks}w · within ${k.windowDays}d`,
+      ...k.blocks.map((b) => `    ${b.kind.padEnd(6)} "${b.label}"${b.unit ? `  (${b.unit})` : ""}`),
+      `    ends → ${k.endsWith.map((e) => `[${e.label.toUpperCase() || "?"}]`).join("  ")}`,
+    ]),
+  ].join("\n");
+
+const BANNER = [
+  "    _     _      _   _  ____   _____  _     ",
+  "   / \\   | |    | | | ||  _ \\ | ____|| |    ",
+  "  / _ \\  | |    | | | || | | ||  _|  | |    ",
+  " / ___ \\ | |___ | |_| || |_| || |___ | |___ ",
+  "/_/   \\_\\|_____| \\___/ |____/ |_____||_____|",
+  "",
+].join("\n");
+
+function Terminal() {
+  const [, force] = useState(0);
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const f = () => force((x) => x + 1);
+    term.subs.add(f);
+    return () => void term.subs.delete(f);
+  }, []);
+  useEffect(() => {
+    body.current?.scrollTo(0, 1e9);
+  });
+  return (
+    <aside className="terminal" aria-hidden="true">
+      <div className="term-bar">
+        <span className="dot red" /><span className="dot yellow" /><span className="dot green" />
+        <span className="term-title">aludel — console</span>
+      </div>
+      <div className="term-body" ref={body}>
+        <pre className="term-banner">{BANNER}</pre>
+        {term.lines.map((l, i) => (
+          <div key={i} className="term-line">{l}</div>
+        ))}
+        {term.doc && <pre className="term-doc">{term.doc}</pre>}
+        <div className="term-line">$ <span className="caret" /></div>
+      </div>
+    </aside>
+  );
 }
 
 const uid = () => crypto.randomUUID();
@@ -39,10 +100,13 @@ const move = <T,>(xs: T[], i: number, dir: -1 | 1): T[] => {
 
 export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
-  return openId ? (
-    <Editor id={openId} onBack={() => setOpenId(null)} />
-  ) : (
-    <Home onOpen={setOpenId} />
+  return (
+    <div className="layout">
+      <Terminal />
+      <main className="pane">
+        {openId ? <Editor id={openId} onBack={() => setOpenId(null)} /> : <Home onOpen={setOpenId} />}
+      </main>
+    </div>
   );
 }
 
@@ -61,7 +125,12 @@ function Home({ onOpen }: { onOpen: (id: string) => void }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api<Meta[]>("/templates").then(setList, (e) => setError(e.message));
+    api<Meta[]>("/templates").then((xs) => {
+      setList(xs);
+      termDoc(
+        [`templates (${xs.length})`, ...xs.map((t) => `  ${t.name}  v${t.version}`)].join("\n")
+      );
+    }, (e) => setError(e.message));
   }, []);
 
   const create = async () => {
@@ -107,6 +176,10 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
       setSaved(JSON.stringify({ name: t.name, tasks: t.tasks }));
     }, (e) => setError(e.message));
   }, [id]);
+
+  useEffect(() => {
+    if (tpl) termDoc(dumpTemplate(tpl));
+  }, [tpl]);
 
   if (!tpl) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
 
