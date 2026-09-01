@@ -143,6 +143,187 @@ async function teamRoutes(
     return error(405, "Method not allowed");
   }
 
+  // ——— lists: containers of worksites ———
+  if (rest === "/lists") {
+    if (req.method === "GET") {
+      const { results } = await env.DB.prepare(
+        `SELECT l.id, l.name, (SELECT COUNT(*) FROM sites s WHERE s.list_id = l.id) AS sites
+         FROM lists l WHERE l.team_id = ? ORDER BY l.name`
+      )
+        .bind(teamId)
+        .all();
+      return json(results);
+    }
+    if (req.method === "POST") {
+      const body = await readBody(req);
+      const name = field(body?.name, LIMITS.name);
+      if (!name) return error(422, "List name required");
+      const id = crypto.randomUUID();
+      await env.DB.prepare("INSERT INTO lists (id, team_id, name, created_at) VALUES (?, ?, ?, ?)")
+        .bind(id, teamId, name, nowIso())
+        .run();
+      return json({ id, name, sites: 0 }, 201);
+    }
+    return error(405, "Method not allowed");
+  }
+
+  const list = rest.match(new RegExp(`^/lists/(${UUID})$`));
+  if (list) {
+    const id = list[1]!;
+    if (req.method === "PATCH") {
+      const body = await readBody(req);
+      const name = field(body?.name, LIMITS.name);
+      if (!name) return error(422, "List name required");
+      const res = await env.DB.prepare("UPDATE lists SET name = ? WHERE id = ? AND team_id = ?")
+        .bind(name, id, teamId)
+        .run();
+      return res.meta.changes ? json({ ok: true }) : error(404, "Not found");
+    }
+    if (req.method === "DELETE") {
+      // sites in the list survive; they just become unlisted (ON DELETE SET NULL)
+      const res = await env.DB.prepare("DELETE FROM lists WHERE id = ? AND team_id = ?")
+        .bind(id, teamId)
+        .run();
+      return res.meta.changes ? json({ ok: true }) : error(404, "Not found");
+    }
+    return error(405, "Method not allowed");
+  }
+
+  // ——— worksites ———
+  /** A list id is only valid if it is one of this team's lists. */
+  const listFor = async (v: unknown): Promise<string | null | undefined> => {
+    if (v === null || v === undefined || v === "") return null;
+    if (typeof v !== "string" || !new RegExp(`^${UUID}$`).test(v)) return undefined;
+    const row = await env.DB.prepare("SELECT 1 AS hit FROM lists WHERE id = ? AND team_id = ?")
+      .bind(v, teamId)
+      .first();
+    return row ? v : undefined;
+  };
+
+  if (rest === "/sites") {
+    if (req.method === "GET") {
+      const { results } = await env.DB.prepare(
+        `SELECT s.id, s.client_name AS clientName, s.address, s.phone,
+                s.list_id AS listId, l.name AS listName,
+                (SELECT COUNT(*) FROM dispatches d WHERE d.site_id = s.id) AS dispatches
+         FROM sites s LEFT JOIN lists l ON l.id = s.list_id
+         WHERE s.team_id = ?
+         ORDER BY l.name IS NULL, l.name, s.client_name`
+      )
+        .bind(teamId)
+        .all();
+      return json(results);
+    }
+    if (req.method === "POST") {
+      const body = await readBody(req);
+      const clientName = field(body?.clientName, LIMITS.name) || "New site";
+      const listId = await listFor(body?.listId);
+      if (listId === undefined) return error(422, "Unknown list");
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO sites (id, team_id, list_id, client_name, address, phone, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+        .bind(
+          id,
+          teamId,
+          listId,
+          clientName,
+          field(body?.address, 240),
+          field(body?.phone, 40),
+          nowIso(),
+          nowIso()
+        )
+        .run();
+      return json({ id }, 201);
+    }
+    return error(405, "Method not allowed");
+  }
+
+  const site = rest.match(new RegExp(`^/sites/(${UUID})(?:/dispatches(?:/(${UUID}))?)?$`));
+  if (site) {
+    const siteId = site[1]!;
+    const onDispatches = rest.includes("/dispatches");
+    const dispatchId = site[2];
+
+    // every site route starts by proving the site is this team's
+    const owned = await env.DB.prepare("SELECT 1 AS hit FROM sites WHERE id = ? AND team_id = ?")
+      .bind(siteId, teamId)
+      .first();
+    if (!owned) return error(404, "Not found");
+
+    if (!onDispatches && req.method === "GET") {
+      const row = await env.DB.prepare(
+        `SELECT id, client_name AS clientName, address, phone, list_id AS listId
+         FROM sites WHERE id = ?`
+      )
+        .bind(siteId)
+        .first();
+      const { results: dispatches } = await env.DB.prepare(
+        `SELECT d.id, d.template_id AS templateId, t.name AS templateName,
+                d.template_version AS templateVersion, t.version AS currentVersion,
+                d.created_at AS createdAt
+         FROM dispatches d JOIN templates t ON t.id = d.template_id
+         WHERE d.site_id = ? ORDER BY d.created_at DESC`
+      )
+        .bind(siteId)
+        .all();
+      return json({ ...row, dispatches });
+    }
+
+    if (!onDispatches && req.method === "PATCH") {
+      const body = await readBody(req);
+      if (!body) return error(422, "Invalid site");
+      const clientName = field(body.clientName, LIMITS.name);
+      if (!clientName) return error(422, "Client name required");
+      const listId = await listFor(body.listId);
+      if (listId === undefined) return error(422, "Unknown list");
+      await env.DB.prepare(
+        `UPDATE sites SET client_name = ?, address = ?, phone = ?, list_id = ?, updated_at = ?
+         WHERE id = ?`
+      )
+        .bind(clientName, field(body.address, 240), field(body.phone, 40), listId, nowIso(), siteId)
+        .run();
+      return json({ ok: true });
+    }
+
+    if (!onDispatches && req.method === "DELETE") {
+      await env.DB.prepare("DELETE FROM sites WHERE id = ?").bind(siteId).run();
+      return json({ ok: true });
+    }
+
+    // dispatch: the site borrows a template, noting the version it borrowed
+    if (onDispatches && !dispatchId && req.method === "POST") {
+      const body = await readBody(req);
+      const templateId = field(body?.templateId, 36);
+      const tpl = await env.DB.prepare("SELECT version FROM templates WHERE id = ? AND team_id = ?")
+        .bind(templateId, teamId)
+        .first<{ version: number }>();
+      if (!tpl) return error(422, "Unknown template");
+      const id = crypto.randomUUID();
+      try {
+        await env.DB.prepare(
+          `INSERT INTO dispatches (id, team_id, site_id, template_id, template_version, created_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(id, teamId, siteId, templateId, tpl.version, user.id, nowIso())
+          .run();
+      } catch (e) {
+        if (/UNIQUE/i.test(String(e))) return error(409, "Already dispatched to this site");
+        throw e;
+      }
+      return json({ id, templateVersion: tpl.version }, 201);
+    }
+
+    if (onDispatches && dispatchId && req.method === "DELETE") {
+      const res = await env.DB.prepare("DELETE FROM dispatches WHERE id = ? AND site_id = ?")
+        .bind(dispatchId, siteId)
+        .run();
+      return res.meta.changes ? json({ ok: true }) : error(404, "Not found");
+    }
+    return error(405, "Method not allowed");
+  }
+
   // ——— members ———
   if (rest === "/members" && req.method === "GET") {
     const { results } = await env.DB.prepare(

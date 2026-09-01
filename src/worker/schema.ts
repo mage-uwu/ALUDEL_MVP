@@ -53,6 +53,23 @@ const TABLES = [
      accepted_at TEXT,
      accepted_by TEXT
    )`,
+  // lists are containers of worksites; a site may sit in at most one
+  `CREATE TABLE IF NOT EXISTS lists (
+     id TEXT PRIMARY KEY,
+     team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+     name TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS sites (
+     id TEXT PRIMARY KEY,
+     team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+     list_id TEXT REFERENCES lists(id) ON DELETE SET NULL,
+     client_name TEXT NOT NULL,
+     address TEXT NOT NULL DEFAULT '',
+     phone TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   )`,
   `CREATE TABLE IF NOT EXISTS templates (
      id TEXT PRIMARY KEY,
      team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
@@ -61,10 +78,25 @@ const TABLES = [
      doc TEXT NOT NULL,
      updated_at TEXT NOT NULL
    )`,
+  // a template borrowed by a worksite; one borrow of a given template per site
+  `CREATE TABLE IF NOT EXISTS dispatches (
+     id TEXT PRIMARY KEY,
+     team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+     site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+     template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+     template_version INTEGER NOT NULL,
+     created_by TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     UNIQUE (site_id, template_id)
+   )`,
 ];
 
 const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_memberships_user ON memberships(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_lists_team ON lists(team_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sites_team ON sites(team_id, list_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_dispatches_site ON dispatches(site_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_dispatches_template ON dispatches(template_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_invites_team ON invites(team_id)`,
   `CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(email)`,

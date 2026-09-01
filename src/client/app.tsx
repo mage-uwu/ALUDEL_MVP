@@ -38,6 +38,39 @@ interface Invite {
   expiresAt: string;
 }
 
+type Section = "templates" | "sites";
+
+interface ListRef {
+  id: string;
+  name: string;
+  sites: number;
+}
+interface SiteRow {
+  id: string;
+  clientName: string;
+  address: string;
+  phone: string;
+  listId: string | null;
+  listName: string | null;
+  dispatches: number;
+}
+interface Dispatch {
+  id: string;
+  templateId: string;
+  templateName: string;
+  templateVersion: number;
+  currentVersion: number;
+  createdAt: string;
+}
+interface SiteDoc {
+  id: string;
+  clientName: string;
+  address: string;
+  phone: string;
+  listId: string | null;
+  dispatches: Dispatch[];
+}
+
 class Unauthorized extends Error {}
 
 const signIn = (returnTo = location.pathname) => {
@@ -209,7 +242,9 @@ export default function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [teamId, setTeamId] = useState<string | null>(() => recall("team"));
   const [screen, setScreen] = useState<"templates" | "members">("templates");
+  const [section, setSection] = useState<Section>(() => (recall("section") === "sites" ? "sites" : "templates"));
   const [openId, setOpenId] = useState<string | null>(null);
+  const [openSite, setOpenSite] = useState<string | null>(null);
   const inviteToken = location.pathname.startsWith("/invite/")
     ? location.pathname.slice("/invite/".length)
     : null;
@@ -233,6 +268,9 @@ export default function App() {
   useEffect(() => {
     remember("team", teamId);
   }, [teamId]);
+  useEffect(() => {
+    remember("section", section);
+  }, [section]);
 
   const team = me?.teams.find((t) => t.id === teamId) ?? null;
 
@@ -243,16 +281,22 @@ export default function App() {
     if (!team) return <NewTeam onCreated={load} />;
     if (screen === "members")
       return <Members team={team} me={me} onBack={() => setScreen("templates")} onChanged={load} />;
-    return openId ? (
-      <Editor teamId={team.id} id={openId} onBack={() => setOpenId(null)} />
-    ) : (
-      <Home
+    if (openId) return <Editor teamId={team.id} id={openId} onBack={() => setOpenId(null)} />;
+    if (openSite) return <SiteEditor teamId={team.id} id={openSite} onBack={() => setOpenSite(null)} />;
+    const head = (
+      <HomeHeader
         team={team}
         me={me}
-        onOpen={setOpenId}
+        section={section}
+        onSection={setSection}
         onMembers={() => setScreen("members")}
         onSwitch={setTeamId}
       />
+    );
+    return section === "sites" ? (
+      <Sites team={team} head={head} onOpen={setOpenSite} />
+    ) : (
+      <Home team={team} head={head} onOpen={setOpenId} />
     );
   };
 
@@ -390,22 +434,104 @@ function AcceptInvite({ token, me, onDone }: { token: string; me: Me | null; onD
   );
 }
 
-function Home({
+function HomeHeader({
   team,
   me,
-  onOpen,
+  section,
+  onSection,
   onMembers,
   onSwitch,
 }: {
   team: TeamRef;
   me: Me;
-  onOpen: (id: string) => void;
+  section: Section;
+  onSection: (s: Section) => void;
   onMembers: () => void;
   onSwitch: (id: string) => void;
 }) {
+  const [menu, setMenu] = useState(false);
+  return (
+    <header className="home-head">
+      <Logo size={30} className="home-mark" />
+      <div className="home-title">
+        <nav className="seg glass-pane" aria-label="Section">
+          {(["templates", "sites"] as const).map((sec) => (
+            <button
+              key={sec}
+              className={`seg-btn${section === sec ? " active" : ""}`}
+              aria-current={section === sec ? "page" : undefined}
+              onClick={() => onSection(sec)}
+            >
+              {sec === "templates" ? "Templates" : "Sites"}
+            </button>
+          ))}
+        </nav>
+        <span className="team-name">{team.name}</span>
+      </div>
+      <div className="menu-wrap">
+        <button
+          className="icon-btn"
+          aria-label="Team menu"
+          aria-expanded={menu}
+          onClick={() => setMenu((m) => !m)}
+        >
+          <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
+            <circle cx="2" cy="2" r="1.8" />
+            <circle cx="9" cy="2" r="1.8" />
+            <circle cx="16" cy="2" r="1.8" />
+          </svg>
+        </button>
+        {menu && (
+          <>
+            <div className="menu-scrim" onClick={() => setMenu(false)} />
+            <div className="menu" role="menu">
+              <button className="menu-item" role="menuitem" onClick={() => { setMenu(false); onMembers(); }}>
+                Members
+              </button>
+              {me.teams.length > 1 && (
+                <>
+                  <p className="menu-label">Switch team</p>
+                  {me.teams.map((t) => (
+                    <button
+                      key={t.id}
+                      className={`menu-item${t.id === team.id ? " current" : ""}`}
+                      role="menuitem"
+                      onClick={() => { setMenu(false); onSwitch(t.id); }}
+                    >
+                      {t.name}
+                    </button>
+                  ))}
+                </>
+              )}
+              <button
+                className="menu-item"
+                role="menuitem"
+                onClick={async () => {
+                  await fetch("/auth/logout", { method: "POST" });
+                  location.href = "/";
+                }}
+              >
+                Sign out
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function Home({
+  team,
+  head,
+  onOpen,
+}: {
+  team: TeamRef;
+  head: React.ReactNode;
+  onOpen: (id: string) => void;
+}) {
   const [list, setList] = useState<Meta[] | null>(null);
   const [error, setError] = useState("");
-  const [menu, setMenu] = useState(false);
 
   useEffect(() => {
     setList(null);
@@ -431,62 +557,7 @@ function Home({
 
   return (
     <div className="shell">
-      <header className="home-head">
-        <Logo size={30} className="home-mark" />
-        <div className="home-title">
-          <h1>Templates</h1>
-          <span className="team-name">{team.name}</span>
-        </div>
-        <div className="menu-wrap">
-          <button
-            className="icon-btn"
-            aria-label="Team menu"
-            aria-expanded={menu}
-            onClick={() => setMenu((m) => !m)}
-          >
-            <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
-              <circle cx="2" cy="2" r="1.8" />
-              <circle cx="9" cy="2" r="1.8" />
-              <circle cx="16" cy="2" r="1.8" />
-            </svg>
-          </button>
-          {menu && (
-            <>
-              <div className="menu-scrim" onClick={() => setMenu(false)} />
-              <div className="menu" role="menu">
-                <button className="menu-item" role="menuitem" onClick={() => { setMenu(false); onMembers(); }}>
-                  Members
-                </button>
-                {me.teams.length > 1 && (
-                  <>
-                    <p className="menu-label">Switch team</p>
-                    {me.teams.map((t) => (
-                      <button
-                        key={t.id}
-                        className={`menu-item${t.id === team.id ? " current" : ""}`}
-                        role="menuitem"
-                        onClick={() => { setMenu(false); onSwitch(t.id); }}
-                      >
-                        {t.name}
-                      </button>
-                    ))}
-                  </>
-                )}
-                <button
-                  className="menu-item"
-                  role="menuitem"
-                  onClick={async () => {
-                    await fetch("/auth/logout", { method: "POST" });
-                    location.href = "/";
-                  }}
-                >
-                  Sign out
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </header>
+      {head}
 
       {error && <p className="error">{error}</p>}
 
@@ -949,6 +1020,335 @@ function Members({
             </div>
           ))}
         </section>
+      )}
+    </div>
+  );
+}
+
+function Sites({
+  team,
+  head,
+  onOpen,
+}: {
+  team: TeamRef;
+  head: React.ReactNode;
+  onOpen: (id: string) => void;
+}) {
+  const [lists, setLists] = useState<ListRef[] | null>(null);
+  const [sites, setSites] = useState<SiteRow[] | null>(null);
+  const [newList, setNewList] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const load = () => {
+    Promise.all([
+      api<ListRef[]>(`/teams/${team.id}/lists`),
+      api<SiteRow[]>(`/teams/${team.id}/sites`),
+    ]).then(([ls, ss]) => {
+      setLists(ls);
+      setSites(ss);
+      termDoc(
+        [
+          `sites (${ss.length}) in ${plural(ls.length, "list")}`,
+          ...ss.map(
+            (x) =>
+              `  ${(x.listName ?? "unlisted").padEnd(14)} ${x.clientName}${x.dispatches ? `  ⇢ ${plural(x.dispatches, "template")}` : ""}`
+          ),
+        ].join("\n")
+      );
+    }, (e) => setError(e.message));
+  };
+  useEffect(load, [team.id]);
+
+  const create = async () => {
+    try {
+      const { id } = await api<{ id: string }>(`/teams/${team.id}/sites`, {
+        method: "POST",
+        body: JSON.stringify({ clientName: "New site" }),
+      });
+      onOpen(id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const addList = async () => {
+    const name = newList?.trim();
+    if (!name) return setNewList(null);
+    try {
+      await api(`/teams/${team.id}/lists`, { method: "POST", body: JSON.stringify({ name }) });
+      setNewList(null);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const removeList = async (l: ListRef) => {
+    if (!confirm(`Delete list "${l.name}"? Its ${plural(l.sites, "site")} will stay, unlisted.`)) return;
+    try {
+      await api(`/teams/${team.id}/lists/${l.id}`, { method: "DELETE" });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const groups: { key: string; name: string; list: ListRef | null; rows: SiteRow[] }[] = [
+    ...(lists ?? []).map((l) => ({ key: l.id, name: l.name, list: l, rows: (sites ?? []).filter((x) => x.listId === l.id) })),
+  ];
+  const unlisted = (sites ?? []).filter((x) => !x.listId);
+  if (unlisted.length) groups.push({ key: "none", name: "Unlisted", list: null, rows: unlisted });
+
+  const row = (x: SiteRow) => (
+    <button key={x.id} className="card glass-frosted template-card" onClick={() => onOpen(x.id)}>
+      <span className="template-text">
+        <span className="template-name">{x.clientName}</span>
+        <span className="template-meta">
+          {[x.address, x.phone].filter(Boolean).join(" · ") || "No address yet"}
+        </span>
+      </span>
+      {x.dispatches > 0 && <span className="version">{x.dispatches} ⇢</span>}
+      <span className="chevron" aria-hidden="true">›</span>
+    </button>
+  );
+
+  return (
+    <div className="shell">
+      {head}
+      {error && <p className="error">{error}</p>}
+
+      {groups.map((g) => (
+        <section key={g.key} className="group">
+          <div className="group-head">
+            <span className="section-label">{g.name}</span>
+            <span className="group-count">{plural(g.rows.length, "site")}</span>
+            {g.list && (
+              <button className="icon-btn danger" aria-label={`Delete list ${g.name}`} onClick={() => removeList(g.list!)}>
+                ×
+              </button>
+            )}
+          </div>
+          {g.rows.map(row)}
+          {g.rows.length === 0 && <p className="group-empty">No sites in this list yet.</p>}
+        </section>
+      ))}
+
+      {sites?.length === 0 && lists?.length === 0 && (
+        <div className="empty">
+          <p className="empty-title">No sites yet</p>
+          <p className="empty-hint">A site is a client, an address and a phone number. Group sites into lists, then dispatch templates to them.</p>
+        </div>
+      )}
+
+      {newList === null ? (
+        <div className="add-row">
+          <button onClick={() => setNewList("")}>+ New list</button>
+        </div>
+      ) : (
+        <div className="invite-row">
+          <input
+            className="text-input"
+            value={newList}
+            placeholder="List name"
+            maxLength={80}
+            autoFocus
+            onChange={(e) => setNewList(e.target.value)}
+            onKeyDown={(e) => (e.key === "Enter" ? addList() : e.key === "Escape" && setNewList(null))}
+            aria-label="New list name"
+          />
+          <button className="big-btn" onClick={addList}>Add</button>
+        </div>
+      )}
+
+      <div className="dock">
+        <button className="big-btn primary" onClick={create}>+ New site</button>
+      </div>
+    </div>
+  );
+}
+
+function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack: () => void }) {
+  const [site, setSite] = useState<SiteDoc | null>(null);
+  const [lists, setLists] = useState<ListRef[]>([]);
+  const [templates, setTemplates] = useState<Meta[]>([]);
+  const [saved, setSaved] = useState("");
+  const [error, setError] = useState("");
+  const [menu, setMenu] = useState(false);
+  const [picker, setPicker] = useState(false);
+
+  const fields = (x: SiteDoc) => ({ clientName: x.clientName, address: x.address, phone: x.phone, listId: x.listId });
+  const dirty = useMemo(() => !!site && JSON.stringify(fields(site)) !== saved, [site, saved]);
+
+  const load = () =>
+    api<SiteDoc>(`/teams/${teamId}/sites/${id}`).then((x) => {
+      setSite(x);
+      setSaved(JSON.stringify(fields(x)));
+    }, (e) => setError(e.message));
+
+  useEffect(() => {
+    load();
+    api<ListRef[]>(`/teams/${teamId}/lists`).then(setLists, () => setLists([]));
+    api<Meta[]>(`/teams/${teamId}/templates`).then(setTemplates, () => setTemplates([]));
+  }, [teamId, id]);
+
+  useEffect(() => {
+    if (!site) return;
+    const listName = lists.find((l) => l.id === site.listId)?.name ?? "unlisted";
+    termDoc(
+      [
+        `site "${site.clientName}"`,
+        `  ${site.address || "—"}`,
+        `  ${site.phone || "—"}  ·  ${listName}`,
+        ``,
+        ...(site.dispatches.length
+          ? site.dispatches.map((d) => `  ⇢ "${d.templateName}"  v${d.templateVersion}`)
+          : [`  (nothing dispatched)`]),
+      ].join("\n")
+    );
+  }, [site, lists]);
+
+  if (!site) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
+
+  const patch = (p: Partial<SiteDoc>) => setSite((s) => s && { ...s, ...p });
+
+  const save = async () => {
+    try {
+      await api(`/teams/${teamId}/sites/${id}`, { method: "PATCH", body: JSON.stringify(fields(site)) });
+      setSaved(JSON.stringify(fields(site)));
+      setError("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const remove = async () => {
+    if (!confirm(`Delete "${site.clientName}" and its dispatches?`)) return;
+    try {
+      await api(`/teams/${teamId}/sites/${id}`, { method: "DELETE" });
+      onBack();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const dispatch = async (templateId: string) => {
+    setPicker(false);
+    try {
+      await api(`/teams/${teamId}/sites/${id}/dispatches`, { method: "POST", body: JSON.stringify({ templateId }) });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const undispatch = async (d: Dispatch) => {
+    if (!confirm(`Remove "${d.templateName}" from this site?`)) return;
+    try {
+      await api(`/teams/${teamId}/sites/${id}/dispatches/${d.id}`, { method: "DELETE" });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const back = () => {
+    if (dirty && !confirm("Discard unsaved changes?")) return;
+    onBack();
+  };
+
+  const available = templates.filter((t) => !site.dispatches.some((d) => d.templateId === t.id));
+
+  return (
+    <div className="shell editor">
+      <header className="editor-top">
+        <button className="icon-btn" onClick={back} aria-label="Back">‹</button>
+        <input
+          className="title-input"
+          value={site.clientName}
+          maxLength={80}
+          onChange={(e) => patch({ clientName: e.target.value })}
+          aria-label="Client name"
+        />
+        <div className="menu-wrap">
+          <button className="icon-btn" aria-label="Options" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
+            <svg width="18" height="4" viewBox="0 0 18 4" fill="currentColor" aria-hidden="true">
+              <circle cx="2" cy="2" r="1.8" /><circle cx="9" cy="2" r="1.8" /><circle cx="16" cy="2" r="1.8" />
+            </svg>
+          </button>
+          {menu && (
+            <>
+              <div className="menu-scrim" onClick={() => setMenu(false)} />
+              <div className="menu" role="menu">
+                <button className="menu-item danger" role="menuitem" onClick={() => { setMenu(false); remove(); }}>
+                  Delete site
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </header>
+
+      {error && <p className="error">{error}</p>}
+
+      <section className="card glass-frosted task">
+        <label className="field">
+          <span className="section-label">Address</span>
+          <input className="text-input left" value={site.address} maxLength={240} placeholder="12 Lakeview Dr"
+            onChange={(e) => patch({ address: e.target.value })} />
+        </label>
+        <label className="field">
+          <span className="section-label">Phone</span>
+          <input className="text-input left" type="tel" value={site.phone} maxLength={40} placeholder="(555) 010-2030"
+            onChange={(e) => patch({ phone: e.target.value })} />
+        </label>
+        <label className="field">
+          <span className="section-label">List</span>
+          <select className="role-select wide" value={site.listId ?? ""} onChange={(e) => patch({ listId: e.target.value || null })}>
+            <option value="">Unlisted</option>
+            {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </label>
+      </section>
+
+      <section className="card glass-frosted task">
+        <p className="section-label">Dispatched templates</p>
+        {site.dispatches.map((d) => (
+          <div key={d.id} className="member-row dispatch-row">
+            <span className="template-text">
+              <span className="member-name">{d.templateName}</span>
+              <span className="template-meta">
+                v{d.templateVersion}{d.currentVersion !== d.templateVersion ? ` · template now v${d.currentVersion}` : ""} · {ago(d.createdAt)}
+              </span>
+            </span>
+            <button className="icon-btn danger" aria-label={`Remove ${d.templateName}`} onClick={() => undispatch(d)}>×</button>
+          </div>
+        ))}
+        {site.dispatches.length === 0 && <p className="group-empty">Nothing dispatched to this site yet.</p>}
+        <div className="menu-wrap">
+          <div className="add-row">
+            <button disabled={available.length === 0} onClick={() => setPicker((p) => !p)}>
+              {templates.length === 0 ? "No templates to dispatch" : available.length === 0 ? "All templates dispatched" : "+ Dispatch template"}
+            </button>
+          </div>
+          {picker && (
+            <>
+              <div className="menu-scrim" onClick={() => setPicker(false)} />
+              <div className="menu picker" role="menu">
+                {available.map((t) => (
+                  <button key={t.id} className="menu-item" role="menuitem" onClick={() => dispatch(t.id)}>
+                    {t.name} <span className="template-meta">v{t.version}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+
+      {dirty && (
+        <div className="dock">
+          <button className="big-btn primary" onClick={save}>Save site</button>
+        </div>
       )}
     </div>
   );
