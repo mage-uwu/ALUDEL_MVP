@@ -19,7 +19,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "content-type": "application/json" },
     ...init,
   });
-  termLog(`$ ${init?.method ?? "GET"} /api${path} → ${res.status}`);
+  const short = path.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/i, (m) => `${m.slice(0, 8)}…`);
+  termLog(`$ ${init?.method ?? "GET"} /api${short} → ${res.status}`);
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `Request failed (${res.status})`);

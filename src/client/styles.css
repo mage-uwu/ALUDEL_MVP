@@ -108,8 +108,8 @@ body {
   .terminal {
     display: flex;
     flex-direction: column;
-    width: min(620px, 46vw);
     height: min(900px, calc(100dvh - 56px));
+    aspect-ratio: 9 / 16;
     position: sticky;
     top: 28px;
     padding: 7px;
