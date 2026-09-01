@@ -344,7 +344,6 @@ body {
   text-transform: uppercase;
 }
 .menu-item.current { color: var(--ink); }
-.menu-item { display: flex; align-items: center; justify-content: space-between; }
 .tick { color: var(--muted); font-size: 14px; }
 .menu-sep { height: 1px; margin: 6px 8px; background: rgba(28, 32, 38, 0.08); }
 
@@ -499,7 +498,9 @@ body {
 .menu-item {
   position: relative;
   z-index: 1;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   width: 100%;
   min-height: 48px;
   border: 0;
