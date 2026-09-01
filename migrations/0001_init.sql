@@ -1,0 +1,7 @@
+CREATE TABLE templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  doc TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);

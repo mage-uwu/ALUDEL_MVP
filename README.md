@@ -1,0 +1,33 @@
+# ALUDEL
+
+Dirt-simple form template builder on Cloudflare Workers + D1.
+
+**Model**: Templates → Tasks (molecules, with cadence) → Blocks (atoms: Photo, Text, Number, Button).
+Buttons live only in a task's **ENDS WITH** section; every task has at least one. Cadence values come
+from fixed sets, picked via selects — invalid states are unrepresentable, and the server re-validates
+every document through the same `src/shared/model.ts` gate before it touches the database.
+
+## Develop
+
+```sh
+npm install
+npm run db:migrate:local
+npm run dev          # builds the client, then wrangler dev on http://localhost:8787
+```
+
+## Deploy
+
+```sh
+wrangler d1 create aludel          # put the returned id into wrangler.jsonc
+npm run db:migrate:remote
+npm run deploy
+```
+
+## Layout
+
+- `src/shared/model.ts` — types + the one validation/clamping gate (shared client/server)
+- `src/worker/index.ts` — zero-dependency Worker: 5 JSON routes over one D1 table
+- `src/client/` — React builder UI (mobile-first, frosted glass)
+- `migrations/` — D1 schema
+
+Team tenancy + Google OAuth are the next pass; the API is deliberately a thin, replaceable layer.
