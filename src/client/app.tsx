@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Logo } from "./logo";
 import {
   type Block,
   type BlockKind,
@@ -141,6 +142,7 @@ function Terminal() {
     <aside className="terminal" aria-hidden="true">
       <div className="term-bar">
         <span className="dot red" /><span className="dot yellow" /><span className="dot green" />
+        <Logo size={14} className="term-mark" />
         <span className="term-title">aludel — console</span>
       </div>
       <div className="term-body" ref={body}>
@@ -273,7 +275,7 @@ function SignIn() {
     <div className="shell gate">
       <div className="gate-body">
         <section className="card glass-frosted gate-card">
-          <span className="mark" aria-hidden="true">A</span>
+          <span className="mark" aria-hidden="true"><Logo size={40} /></span>
           <h1 className="brand">ALUDEL</h1>
           <p className="gate-hint">Form templates for your team.</p>
         </section>
@@ -430,6 +432,7 @@ function Home({
   return (
     <div className="shell">
       <header className="home-head">
+        <Logo size={30} className="home-mark" />
         <div className="home-title">
           <h1>Templates</h1>
           <span className="team-name">{team.name}</span>
