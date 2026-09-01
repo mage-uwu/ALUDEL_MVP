@@ -272,8 +272,11 @@ function SignIn() {
   return (
     <div className="shell gate">
       <div className="gate-body">
-        <h1 className="brand">ALUDEL</h1>
-        <p className="gate-hint">Form templates for your team.</p>
+        <section className="card glass-frosted gate-card">
+          <span className="mark" aria-hidden="true">A</span>
+          <h1 className="brand">ALUDEL</h1>
+          <p className="gate-hint">Form templates for your team.</p>
+        </section>
       </div>
       <div className="dock">
         <button className="big-btn primary" onClick={() => signIn()}>
@@ -304,19 +307,21 @@ function NewTeam({ onCreated }: { onCreated: () => void }) {
   return (
     <div className="shell gate">
       <div className="gate-body">
-        <h1 className="gate-title">Name your team</h1>
-        <p className="gate-hint">Templates and members live inside a team. You can invite people next.</p>
-        <input
-          className="text-input"
-          value={name}
-          maxLength={80}
-          placeholder="Acme Pools"
-          autoFocus
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && create()}
-          aria-label="Team name"
-        />
-        {error && <p className="error">{error}</p>}
+        <section className="card glass-frosted gate-card">
+          <h1 className="gate-title">Name your team</h1>
+          <p className="gate-hint">Templates and members live inside a team. You can invite people next.</p>
+          <input
+            className="text-input"
+            value={name}
+            maxLength={80}
+            placeholder="Acme Pools"
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && create()}
+            aria-label="Team name"
+          />
+          {error && <p className="error">{error}</p>}
+        </section>
       </div>
       <div className="dock">
         <button className="big-btn primary" disabled={!name.trim() || busy} onClick={create}>
@@ -352,15 +357,17 @@ function AcceptInvite({ token, me, onDone }: { token: string; me: Me | null; onD
   return (
     <div className="shell gate">
       <div className="gate-body">
-        <h1 className="gate-title">{state === "done" ? `Welcome to ${team}` : "You have been invited"}</h1>
-        {state !== "done" && (
-          <p className="gate-hint">
-            {me
-              ? `Accepting as ${me.user.email}. Invites are tied to the address they were sent to.`
-              : "Sign in with the address the invite was sent to."}
-          </p>
-        )}
-        {error && <p className="error">{error}</p>}
+        <section className="card glass-frosted gate-card">
+          <h1 className="gate-title">{state === "done" ? `Welcome to ${team}` : "You have been invited"}</h1>
+          {state !== "done" && (
+            <p className="gate-hint">
+              {me
+                ? `Accepting as ${me.user.email}. Invites are tied to the address they were sent to.`
+                : "Sign in with the address the invite was sent to."}
+            </p>
+          )}
+          {error && <p className="error">{error}</p>}
+        </section>
       </div>
       <div className="dock">
         {state === "done" ? (
