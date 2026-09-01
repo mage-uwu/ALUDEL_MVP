@@ -62,7 +62,9 @@ export default {
 
       if (req.method === "GET" && !tid) {
         const { results } = await env.DB.prepare(
-          "SELECT id, name, version, updated_at AS updatedAt FROM templates ORDER BY updated_at DESC LIMIT 100"
+          `SELECT id, name, version, updated_at AS updatedAt,
+                  json_array_length(doc, '$.tasks') AS tasks
+           FROM templates ORDER BY updated_at DESC LIMIT 100`
         ).all();
         return json(results);
       }

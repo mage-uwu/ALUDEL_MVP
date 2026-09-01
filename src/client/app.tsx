@@ -11,7 +11,18 @@ interface Meta {
   name: string;
   version: number;
   updatedAt: string;
+  tasks: number;
 }
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+const ago = (iso: string): string => {
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (!Number.isFinite(s) || s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
 type Loaded = Template & { id: string; version: number };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -184,15 +195,36 @@ function Home({ onOpen }: { onOpen: (id: string) => void }) {
 
   return (
     <div className="shell">
+      <header className="home-head">
+        <h1>Templates</h1>
+        {list && list.length > 0 && <span className="count">{plural(list.length, "template")}</span>}
+      </header>
+
       {error && <p className="error">{error}</p>}
+
       {list?.map((t) => (
         <button key={t.id} className="card glass-frosted template-card" onClick={() => onOpen(t.id)}>
-          <span className="template-name">{t.name}</span>
+          <span className="template-text">
+            <span className="template-name">{t.name}</span>
+            <span className="template-meta">
+              {plural(t.tasks, "task")} · updated {ago(t.updatedAt)}
+            </span>
+          </span>
           <span className="version">v{t.version}</span>
+          <span className="chevron" aria-hidden="true">›</span>
         </button>
       ))}
-      {list?.length === 0 && <p className="empty">No templates yet — start with your first one.</p>}
-      <button className="big-btn primary" onClick={create}>+ New template</button>
+
+      {list?.length === 0 && (
+        <div className="empty">
+          <p className="empty-title">No templates yet</p>
+          <p className="empty-hint">Start one and add tasks, photos, fields and buttons.</p>
+        </div>
+      )}
+
+      <div className="dock">
+        <button className="big-btn primary" onClick={create}>+ New template</button>
+      </div>
     </div>
   );
 }
@@ -326,7 +358,7 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
       </div>
       <button className="big-btn" onClick={addTask}>+ Add task</button>
       {dirty && (
-        <div className="save-bar">
+        <div className="dock">
           <button className="big-btn primary" onClick={save}>Save · v{tpl.version + 1}</button>
         </div>
       )}
