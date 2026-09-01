@@ -113,6 +113,8 @@ body {
   }
   /* fill the screen so the docked action rides the bottom edge */
   .pane .shell { min-height: 100%; padding: 18px 14px 20px; }
+  /* scoped to .screen so it outranks the base fixed rule regardless of order */
+  .screen .sheet, .screen .modal-scrim { position: absolute; }
   /* jet black, wrapped in the slightest rim of glass */
   .terminal {
     display: flex;
@@ -379,32 +381,67 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip {
-  display: inline-flex;
+/* a tappable row that opens a sheet: ceramic, like every other action */
+.row-btn {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  min-height: 36px;
-  padding: 0 4px 0 12px;
+  gap: 8px;
+  width: 100%;
+  min-height: 56px;
+  padding: 0 10px 0 16px;
   border: 1px solid var(--ceramic-border);
-  border-radius: 999px;
+  border-radius: 14px;
   background: var(--ceramic);
-  box-shadow: inset 0 1px 0 #fff, 0 2px 6px -4px rgba(28, 32, 38, 0.3);
-  font-size: 13px;
-  font-weight: 700;
-}
-.chip-x {
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--muted);
+  box-shadow: inset 0 1px 0 #fff, 0 8px 16px -10px rgba(28, 32, 38, 0.3);
   font: inherit;
-  font-size: 16px;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
   cursor: pointer;
 }
-.chip-x:active { background: rgba(28, 32, 38, 0.08); }
+.row-btn:active { transform: translateY(1px); }
+.row-btn-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-btn .placeholder { color: #aeb3ba; font-weight: 600; }
+
+/* fullscreen sheet: covers the phone screen on desktop, the viewport on a phone */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  overflow-y: auto;
+  background: var(--room);
+}
+.email-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-email { display: flex; gap: 8px; align-items: stretch; }
+.add-email .text-input { margin-top: 0; }
+.big-btn.plus { flex: none; width: 56px; min-height: 56px; font-size: 26px; line-height: 1; padding: 0; }
+
+/* modal: the place a mistake is pointed out, not the header */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(23, 24, 26, 0.28);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.modal {
+  width: 100%;
+  max-width: 340px;
+  padding: 22px 20px 16px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.93));
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 1px 0 #fff, 0 30px 60px -20px rgba(16, 18, 22, 0.5);
+  text-align: center;
+}
+.modal-title { margin: 0 0 6px; font-size: 18px; font-weight: 900; }
+.modal-msg { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.modal .big-btn { width: 100%; }
 .text-input.left { text-align: left; margin-top: 0; }
 .role-select.wide { width: 100%; min-height: 50px; border-radius: 14px; padding: 0 14px; font-size: 15px; }
 .dispatch-row { padding: 10px 2px 10px 6px; min-height: 56px; }

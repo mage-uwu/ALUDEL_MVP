@@ -1192,7 +1192,7 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
   const [menu, setMenu] = useState(false);
   const [picker, setPicker] = useState(false);
 
-  const [draft, setDraft] = useState("");
+  const [wizard, setWizard] = useState(false);
   const fields = (x: SiteDoc) => ({ clientName: x.clientName, address: x.address, emails: x.emails, listId: x.listId });
   const dirty = useMemo(() => !!site && JSON.stringify(fields(site)) !== saved, [site, saved]);
 
@@ -1227,17 +1227,6 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
   if (!site) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
 
   const patch = (p: Partial<SiteDoc>) => setSite((s) => s && { ...s, ...p });
-
-  // Enter, comma or leaving the box commits a valid address; invalid text stays put
-  const addEmail = () => {
-    const e = draft.trim().toLowerCase();
-    if (!e) return;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return setError("That doesn't look like an email address");
-    if (site.emails.length >= 10) return setError("Up to 10 emails per site");
-    setError("");
-    setDraft("");
-    if (!site.emails.includes(e)) patch({ emails: [...site.emails, e] });
-  };
 
   const save = async () => {
     try {
@@ -1327,30 +1316,12 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
         </label>
         <div className="field">
           <span className="section-label">Emails</span>
-          {site.emails.length > 0 && (
-            <div className="chips">
-              {site.emails.map((e) => (
-                <span key={e} className="chip">
-                  {e}
-                  <button className="chip-x" aria-label={`Remove ${e}`}
-                    onClick={() => patch({ emails: site.emails.filter((x) => x !== e) })}>×</button>
-                </span>
-              ))}
-            </div>
-          )}
-          <input
-            className="text-input left"
-            type="email"
-            inputMode="email"
-            autoCapitalize="none"
-            value={draft}
-            placeholder={site.emails.length ? "Add another" : "name@example.com"}
-            maxLength={160}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === ",") && (e.preventDefault(), addEmail())}
-            onBlur={addEmail}
-            aria-label="Add email"
-          />
+          <button className="row-btn" onClick={() => setWizard(true)} aria-label="Edit emails">
+            <span className="row-btn-text">
+              {site.emails.length ? site.emails.join(", ") : <span className="placeholder">Add emails</span>}
+            </span>
+            <span className="chevron" aria-hidden="true">›</span>
+          </button>
         </div>
         <label className="field">
           <span className="section-label">List</span>
@@ -1401,6 +1372,92 @@ function SiteEditor({ teamId, id, onBack }: { teamId: string; id: string; onBack
           <button className="big-btn primary" onClick={save}>Save site</button>
         </div>
       )}
+
+      {wizard && (
+        <EmailsSheet
+          emails={site.emails}
+          onDone={(emails) => {
+            patch({ emails });
+            setWizard(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Fullscreen editor for a site's contact emails. Mistakes surface as a modal, not a banner. */
+function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: string[]) => void }) {
+  const [list, setList] = useState(emails);
+  const [draft, setDraft] = useState("");
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
+
+  const add = () => {
+    const e = draft.trim().toLowerCase();
+    if (!e) return;
+    if (!EMAIL_RE.test(e))
+      return setAlert({ title: "Not an email address", message: `“${draft.trim()}” is missing an @ or a domain. Check it and try again.` });
+    if (list.length >= 10)
+      return setAlert({ title: "That's the limit", message: "A site can hold up to 10 emails. Remove one to add another." });
+    if (!list.includes(e)) setList([...list, e]);
+    setDraft("");
+  };
+
+  return (
+    <div className="sheet">
+      <div className="shell editor">
+        <header className="editor-top">
+          <button className="icon-btn" onClick={() => onDone(list)} aria-label="Back">‹</button>
+          <h1 className="site-title">Emails</h1>
+          <span className="version">{list.length} / 10</span>
+        </header>
+
+        <section className="card glass-frosted task">
+          {list.map((e) => (
+            <div key={e} className="member-row dispatch-row">
+              <span className="member-name email-name">{e}</span>
+              <button className="icon-btn danger" aria-label={`Remove ${e}`} onClick={() => setList(list.filter((x) => x !== e))}>×</button>
+            </div>
+          ))}
+          {list.length === 0 && <p className="group-empty">No emails yet. Add the people who should hear about this site.</p>}
+          <div className="add-email">
+            <input
+              className="text-input left"
+              type="email"
+              inputMode="email"
+              autoCapitalize="none"
+              autoFocus
+              value={draft}
+              placeholder="name@example.com"
+              maxLength={160}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), add())}
+              aria-label="Email address"
+            />
+            <button className="big-btn plus" onClick={add} aria-label="Add email">+</button>
+          </div>
+        </section>
+
+        <div className="dock">
+          <button className="big-btn primary" onClick={() => onDone(list)}>Done</button>
+        </div>
+      </div>
+
+      {alert && <Modal title={alert.title} message={alert.message} onClose={() => setAlert(null)} />}
+    </div>
+  );
+}
+
+function Modal({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
+  return (
+    <div className="modal-scrim" onClick={onClose}>
+      <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby="modal-title" onClick={(e) => e.stopPropagation()}>
+        <p id="modal-title" className="modal-title">{title}</p>
+        <p className="modal-msg">{message}</p>
+        <button className="big-btn" autoFocus onClick={onClose}>OK</button>
+      </div>
     </div>
   );
 }
