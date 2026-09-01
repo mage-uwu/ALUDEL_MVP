@@ -1039,14 +1039,16 @@ function Sites({
 }) {
   const [lists, setLists] = useState<ListRef[] | null>(null);
   const [sites, setSites] = useState<SiteRow[] | null>(null);
-  const [newList, setNewList] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // names as the server last gave them; local edits live in `lists` until saved
+  const savedNames = useRef<Record<string, string>>({});
 
   const load = () => {
     Promise.all([
       api<ListRef[]>(`/teams/${team.id}/lists`),
       api<SiteRow[]>(`/teams/${team.id}/sites`),
     ]).then(([ls, ss]) => {
+      savedNames.current = Object.fromEntries(ls.map((l) => [l.id, l.name]));
       setLists(ls);
       setSites(ss);
       termDoc(
@@ -1074,12 +1076,21 @@ function Sites({
     }
   };
 
+  // lists are created like everything else here: one tap, then rename in place
   const addList = async () => {
-    const name = newList?.trim();
-    if (!name) return setNewList(null);
     try {
-      await api(`/teams/${team.id}/lists`, { method: "POST", body: JSON.stringify({ name }) });
-      setNewList(null);
+      await api(`/teams/${team.id}/lists`, { method: "POST", body: JSON.stringify({ name: "New list" }) });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const renameList = async (l: ListRef, name: string) => {
+    const next = name.trim();
+    if (!next || next === savedNames.current[l.id]) return load();
+    try {
+      await api(`/teams/${team.id}/lists/${l.id}`, { method: "PATCH", body: JSON.stringify({ name: next }) });
       load();
     } catch (e) {
       setError((e as Error).message);
@@ -1123,7 +1134,21 @@ function Sites({
       {groups.map((g) => (
         <section key={g.key} className="group">
           <div className="group-head">
-            <span className="section-label">{g.name}</span>
+            {g.list ? (
+              <input
+                className="group-name"
+                value={g.name}
+                maxLength={80}
+                aria-label="List name"
+                onChange={(e) =>
+                  setLists((ls) => ls && ls.map((l) => (l.id === g.key ? { ...l, name: e.target.value } : l)))
+                }
+                onBlur={(e) => renameList(g.list!, e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+              />
+            ) : (
+              <span className="group-name muted">{g.name}</span>
+            )}
             <span className="group-count">{plural(g.rows.length, "site")}</span>
             {g.list && (
               <button className="icon-btn danger" aria-label={`Delete list ${g.name}`} onClick={() => removeList(g.list!)}>
@@ -1139,27 +1164,13 @@ function Sites({
       {sites?.length === 0 && lists?.length === 0 && (
         <div className="empty">
           <p className="empty-title">No sites yet</p>
-          <p className="empty-hint">A site is a client, an address and a phone number. Group sites into lists, then dispatch templates to them.</p>
+          <p className="empty-hint">A site is a client, an address and a phone. Lists group them; templates get dispatched to them.</p>
         </div>
       )}
 
-      {newList === null ? (
+      {lists && (
         <div className="add-row">
-          <button onClick={() => setNewList("")}>+ New list</button>
-        </div>
-      ) : (
-        <div className="invite-row">
-          <input
-            className="text-input"
-            value={newList}
-            placeholder="List name"
-            maxLength={80}
-            autoFocus
-            onChange={(e) => setNewList(e.target.value)}
-            onKeyDown={(e) => (e.key === "Enter" ? addList() : e.key === "Escape" && setNewList(null))}
-            aria-label="New list name"
-          />
-          <button className="big-btn" onClick={addList}>Add</button>
+          <button onClick={addList}>+ New list</button>
         </div>
       )}
 

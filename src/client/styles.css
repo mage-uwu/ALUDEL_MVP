@@ -349,8 +349,22 @@ body {
 
 /* sites */
 .group { display: flex; flex-direction: column; gap: 10px; }
-.group-head { display: flex; align-items: center; gap: 8px; padding: 6px 4px 0; }
-.group-head .section-label { flex: 1; }
+.group-head { display: flex; align-items: center; gap: 8px; padding: 6px 2px 0; }
+.group-name {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  padding: 6px 4px;
+  outline: none;
+  border-radius: 8px;
+}
+.group-name:focus { background: rgba(255, 255, 255, 0.55); }
+.group-name.muted { color: var(--muted); }
 .group-count { color: var(--muted); font-size: 12px; font-weight: 700; }
 .group-empty { margin: 0; padding: 4px 6px; color: var(--muted); font-size: 13px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
