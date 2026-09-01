@@ -140,9 +140,36 @@ export default function App() {
   return (
     <div className="layout">
       <Terminal />
-      <main className="pane">
-        {openId ? <Editor id={openId} onBack={() => setOpenId(null)} /> : <Home onOpen={setOpenId} />}
-      </main>
+      {/* On wide screens the app sits inside a titanium phone; on a real
+          phone the chrome collapses away and the app fills the viewport. */}
+      <div className="device">
+        <div className="screen">
+          <StatusBar />
+          <main className="pane">
+            {openId ? <Editor id={openId} onBack={() => setOpenId(null)} /> : <Home onOpen={setOpenId} />}
+          </main>
+          <div className="home-indicator" aria-hidden="true" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatusBar() {
+  return (
+    <div className="status-bar" aria-hidden="true">
+      <span className="clock">9:41</span>
+      <span className="island" />
+      <svg className="status-icons" width="66" height="12" viewBox="0 0 66 12" fill="currentColor">
+        <rect x="0" y="7" width="3" height="5" rx="1" />
+        <rect x="5" y="5" width="3" height="7" rx="1" />
+        <rect x="10" y="2.5" width="3" height="9.5" rx="1" />
+        <rect x="15" y="0" width="3" height="12" rx="1" />
+        <path d="M23 4.2a8.6 8.6 0 0 1 10.6 0l-1.5 1.7a6.4 6.4 0 0 0-7.6 0Zm2.6 3a4.7 4.7 0 0 1 5.4 0l-2.7 3.1Z" />
+        <rect x="41" y="1.5" width="19" height="9" rx="2.6" opacity="0.4" fill="none" stroke="currentColor" />
+        <rect x="43" y="3.5" width="15" height="5" rx="1.2" />
+        <path d="M62 4.5v3a2 2 0 0 0 0-3Z" opacity="0.4" />
+      </svg>
     </div>
   );
 }

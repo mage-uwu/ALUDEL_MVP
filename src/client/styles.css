@@ -31,6 +31,16 @@
     repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0 1px, rgba(255, 255, 255, 0) 1px 2px),
     linear-gradient(180deg, #43464c 0%, #2e3136 45%, #24262b 100%);
   --ti-light: linear-gradient(180deg, #f2f3f5 0%, #dcdfe3 55%, #ced1d6 100%);
+
+  /* the room behind the glass: soft tonal shapes for the frost to diffuse —
+     skylight, a cool window, muted greenery, warm floor, furniture shade */
+  --room:
+    radial-gradient(600px 440px at 80% 2%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 65%),
+    radial-gradient(760px 560px at 8% 18%, rgba(176, 197, 222, 0.6), rgba(176, 197, 222, 0) 60%),
+    radial-gradient(680px 560px at 94% 44%, rgba(187, 205, 185, 0.55), rgba(187, 205, 185, 0) 60%),
+    radial-gradient(940px 640px at 22% 78%, rgba(219, 197, 172, 0.65), rgba(219, 197, 172, 0) 62%),
+    radial-gradient(520px 420px at 66% 96%, rgba(146, 156, 170, 0.4), rgba(146, 156, 170, 0) 58%),
+    linear-gradient(170deg, #f0f2f5 0%, #e4e7eb 55%, #dcdfe4 100%);
 }
 
 html { color-scheme: light; }
@@ -39,17 +49,12 @@ body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   color: var(--ink);
-  /* the room behind the glass: soft tonal shapes for the frost to diffuse —
-     skylight, a cool window, muted greenery, warm floor, furniture shade */
-  background:
-    radial-gradient(600px 440px at 80% 2%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 65%),
-    radial-gradient(760px 560px at 8% 18%, rgba(176, 197, 222, 0.6), rgba(176, 197, 222, 0) 60%),
-    radial-gradient(680px 560px at 94% 44%, rgba(187, 205, 185, 0.55), rgba(187, 205, 185, 0) 60%),
-    radial-gradient(940px 640px at 22% 78%, rgba(219, 197, 172, 0.65), rgba(219, 197, 172, 0) 62%),
-    radial-gradient(520px 420px at 66% 96%, rgba(146, 156, 170, 0.4), rgba(146, 156, 170, 0) 58%),
-    linear-gradient(170deg, #f0f2f5 0%, #e4e7eb 55%, #dcdfe4 100%);
+  background: var(--room);
   min-height: 100dvh;
 }
+
+/* phone chrome is desktop-only dressing: on a real phone the app is the app */
+.status-bar, .home-indicator { display: none; }
 
 .shell {
   max-width: 480px;
@@ -60,23 +65,124 @@ body {
   gap: 14px;
 }
 
-/* wide screens: console pane on the left, phone-width app on the right */
+/* wide screens: console on the left, the app running on a titanium phone */
 .terminal { display: none; }
 @media (min-width: 1024px) {
   .layout {
     display: flex;
     justify-content: center;
     align-items: flex-start;
-    gap: 32px;
+    gap: 40px;
     padding: 28px 24px;
   }
-  .pane { width: 480px; flex: none; }
+
+  /* solid titanium unibody */
+  .device {
+    position: relative;
+    flex: none;
+    height: min(900px, calc(100dvh - 56px));
+    aspect-ratio: 9 / 16;
+    padding: 12px;
+    border-radius: 56px;
+    background: var(--ti-dark);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+      inset 0 2px 1px rgba(255, 255, 255, 0.22),
+      inset 0 -2px 1px rgba(0, 0, 0, 0.5),
+      0 40px 80px -30px rgba(16, 18, 22, 0.6),
+      0 8px 24px -12px rgba(16, 18, 22, 0.4);
+  }
+  /* machined side buttons: power right, action + volume pair left */
+  .device::before {
+    content: "";
+    position: absolute;
+    right: -3px;
+    top: 30%;
+    width: 3px;
+    height: 78px;
+    border-radius: 0 2px 2px 0;
+    background: linear-gradient(180deg, #626771, #3c4046);
+  }
+  .device::after {
+    content: "";
+    position: absolute;
+    left: -3px;
+    top: 21%;
+    width: 3px;
+    height: 196px;
+    border-radius: 2px 0 0 2px;
+    background: linear-gradient(180deg,
+      #626771 0 32px, transparent 32px 54px,
+      #626771 54px 112px, transparent 112px 134px,
+      #626771 134px 196px);
+  }
+
+  .screen {
+    position: relative;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    border-radius: 45px;
+    overflow: hidden;
+    background: var(--room);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+  }
+  /* cover glass: a faint sheen across the panel */
+  .screen::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    background: linear-gradient(118deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 26%, rgba(255, 255, 255, 0) 74%, rgba(255, 255, 255, 0.05) 100%);
+  }
+
+  /* status bar with dynamic island */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: none;
+    padding: 14px 30px 4px;
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+  .island {
+    width: 108px;
+    height: 30px;
+    border-radius: 999px;
+    background: #05070a;
+    box-shadow: inset 0 -1px 2px rgba(255, 255, 255, 0.08);
+  }
+  .status-icons { flex: none; }
+
+  .pane {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .pane .shell { padding-bottom: 46px; }
+
+  .home-indicator {
+    display: block;
+    position: absolute;
+    left: 50%;
+    bottom: 9px;
+    transform: translateX(-50%);
+    width: 138px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(23, 24, 26, 0.32);
+  }
   /* smoked glass in a titanium bezel */
   .terminal {
     display: flex;
     flex-direction: column;
     width: min(620px, 46vw);
-    height: calc(100dvh - 56px);
+    height: min(900px, calc(100dvh - 56px));
     position: sticky;
     top: 28px;
     background: linear-gradient(180deg, #111318 0%, #0a0c10 100%);
@@ -513,7 +619,7 @@ body {
 @media (min-width: 1024px) {
   .save-bar {
     position: sticky;
-    bottom: 16px;
+    bottom: 22px;
     padding: 0;
     background: none;
   }
