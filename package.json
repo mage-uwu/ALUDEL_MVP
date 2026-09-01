@@ -6,8 +6,6 @@
     "dev": "npm run build && wrangler dev",
     "build": "vite build",
     "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
-    "db:migrate:local": "wrangler d1 migrations apply aludel --local",
-    "db:migrate:remote": "wrangler d1 migrations apply aludel --remote",
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {

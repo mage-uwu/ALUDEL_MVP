@@ -27,6 +27,16 @@ async function readBody(req: Request): Promise<unknown> {
   }
 }
 
+// Schema is created on demand so a fresh D1 database needs no migration step.
+const SCHEMA =
+  "CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, doc TEXT NOT NULL, updated_at TEXT NOT NULL)";
+let ready: Promise<unknown> | null = null;
+const ensureSchema = (db: D1Database) =>
+  (ready ??= db.prepare(SCHEMA).run()).catch((e) => {
+    ready = null;
+    throw e;
+  });
+
 const starterDoc = () => ({
   tasks: [
     {
@@ -48,6 +58,8 @@ export default {
     const [, tid] = match;
 
     try {
+      await ensureSchema(env.DB);
+
       if (req.method === "GET" && !tid) {
         const { results } = await env.DB.prepare(
           "SELECT id, name, version, updated_at AS updatedAt FROM templates ORDER BY updated_at DESC LIMIT 100"
