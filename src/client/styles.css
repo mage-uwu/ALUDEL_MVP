@@ -48,17 +48,38 @@ input, select, textarea { -webkit-tap-highlight-color: transparent; }
     linear-gradient(170deg, #f0f2f5 0%, #e4e7eb 55%, #dcdfe4 100%);
 }
 
-/* a flat mid-tone behind everything, so iOS overscroll never shows a seam */
-html { color-scheme: light; background: #e6e9ed; }
+/* The document itself never scrolls or zooms: it is a fixed frame, and the
+   only scrolling surfaces are the phone screen and the console. With no
+   document scroll, mobile browser chrome has nothing to collapse, so the
+   layout never resizes underneath the user either. */
+html {
+  color-scheme: light;
+  background: #e6e9ed;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+}
 
 body {
   margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   color: var(--ink);
   background: var(--room);
-  /* the large viewport: the gradient runs under Safari's translucent toolbar too */
-  min-height: 100vh;
-  min-height: 100lvh;
+}
+
+.layout { height: 100vh; height: 100dvh; }
+.device, .screen { height: 100%; }
+.screen { display: flex; flex-direction: column; }
+.pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .shell {
@@ -76,16 +97,18 @@ body {
   .layout {
     display: flex;
     justify-content: center;
-    align-items: flex-start;
+    align-items: center;
     gap: 40px;
     padding: 28px 24px;
   }
 
-  /* a phone-shaped frame: the aspect and the dark chassis do the work */
+  /* a phone-shaped frame: the aspect and the dark chassis do the work.
+     Height is capped by the window's width too, so console + phone can
+     never be wider than the window and force a horizontal scrollbar. */
   .device {
     position: relative;
     flex: none;
-    height: min(900px, calc(100dvh - 56px));
+    height: min(900px, calc(100dvh - 56px), calc((100vw - 88px) * 8 / 9));
     aspect-ratio: 9 / 16;
     padding: 10px;
     border-radius: 46px;
@@ -105,12 +128,6 @@ body {
     background: var(--room);
   }
 
-  .pane {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
   /* fill the screen so the docked action rides the bottom edge */
   .pane .shell { min-height: 100%; padding: 18px 14px 20px; }
   /* scoped to .screen so it outranks the base fixed rule regardless of order */
@@ -119,10 +136,8 @@ body {
   .terminal {
     display: flex;
     flex-direction: column;
-    height: min(900px, calc(100dvh - 56px));
+    height: min(900px, calc(100dvh - 56px), calc((100vw - 88px) * 8 / 9));
     aspect-ratio: 9 / 16;
-    position: sticky;
-    top: 28px;
     padding: 7px;
     border-radius: 30px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.14));
