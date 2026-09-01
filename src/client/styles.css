@@ -53,9 +53,6 @@ body {
   min-height: 100dvh;
 }
 
-/* phone chrome is desktop-only dressing: on a real phone the app is the app */
-.status-bar, .home-indicator { display: none; }
-
 .shell {
   max-width: 480px;
   margin: 0 auto;
@@ -76,45 +73,18 @@ body {
     padding: 28px 24px;
   }
 
-  /* solid titanium unibody */
+  /* a phone-shaped frame: the aspect and the dark chassis do the work */
   .device {
     position: relative;
     flex: none;
     height: min(900px, calc(100dvh - 56px));
     aspect-ratio: 9 / 16;
-    padding: 12px;
-    border-radius: 56px;
-    background: var(--ti-dark);
+    padding: 10px;
+    border-radius: 46px;
+    background: linear-gradient(180deg, #34373d 0%, #26282d 100%);
     box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.16),
-      inset 0 2px 1px rgba(255, 255, 255, 0.22),
-      inset 0 -2px 1px rgba(0, 0, 0, 0.5),
-      0 40px 80px -30px rgba(16, 18, 22, 0.6),
-      0 8px 24px -12px rgba(16, 18, 22, 0.4);
-  }
-  /* machined side buttons: power right, action + volume pair left */
-  .device::before {
-    content: "";
-    position: absolute;
-    right: -3px;
-    top: 30%;
-    width: 3px;
-    height: 78px;
-    border-radius: 0 2px 2px 0;
-    background: linear-gradient(180deg, #626771, #3c4046);
-  }
-  .device::after {
-    content: "";
-    position: absolute;
-    left: -3px;
-    top: 21%;
-    width: 3px;
-    height: 196px;
-    border-radius: 2px 0 0 2px;
-    background: linear-gradient(180deg,
-      #626771 0 32px, transparent 32px 54px,
-      #626771 54px 112px, transparent 112px 134px,
-      #626771 134px 196px);
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 34px 72px -30px rgba(16, 18, 22, 0.5);
   }
 
   .screen {
@@ -122,41 +92,10 @@ body {
     height: 100%;
     display: flex;
     flex-direction: column;
-    border-radius: 45px;
+    border-radius: 37px;
     overflow: hidden;
     background: var(--room);
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55);
   }
-  /* cover glass: a faint sheen across the panel */
-  .screen::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: 4;
-    pointer-events: none;
-    background: linear-gradient(118deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 26%, rgba(255, 255, 255, 0) 74%, rgba(255, 255, 255, 0.05) 100%);
-  }
-
-  /* status bar with dynamic island */
-  .status-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex: none;
-    padding: 14px 30px 4px;
-    color: var(--ink);
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-  }
-  .island {
-    width: 108px;
-    height: 30px;
-    border-radius: 999px;
-    background: #05070a;
-    box-shadow: inset 0 -1px 2px rgba(255, 255, 255, 0.08);
-  }
-  .status-icons { flex: none; }
 
   .pane {
     flex: 1;
@@ -164,19 +103,7 @@ body {
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  .pane .shell { padding-bottom: 46px; }
-
-  .home-indicator {
-    display: block;
-    position: absolute;
-    left: 50%;
-    bottom: 9px;
-    transform: translateX(-50%);
-    width: 138px;
-    height: 5px;
-    border-radius: 999px;
-    background: rgba(23, 24, 26, 0.32);
-  }
+  .pane .shell { padding: 18px 14px 28px; }
   /* jet black, wrapped in the slightest rim of glass */
   .terminal {
     display: flex;
@@ -620,7 +547,7 @@ body {
 @media (min-width: 1024px) {
   .save-bar {
     position: sticky;
-    bottom: 22px;
+    bottom: 6px;
     padding: 0;
     background: none;
   }
