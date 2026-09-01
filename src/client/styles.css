@@ -1,5 +1,9 @@
 * { box-sizing: border-box; }
 
+/* iOS paints button text system-blue unless told otherwise */
+button { color: inherit; -webkit-tap-highlight-color: transparent; }
+input, select, textarea { -webkit-tap-highlight-color: transparent; }
+
 /* ————— materials —————
    One light source, high and slightly left of center. Every surface is one
    of three materials: frosted white glass (layered translucent gradients +
@@ -35,6 +39,7 @@
   /* the room behind the glass: soft tonal shapes for the frost to diffuse —
      skylight, a cool window, muted greenery, warm floor, furniture shade */
   --room:
+    linear-gradient(180deg, #f2f4f7 0px, rgba(242, 244, 247, 0) 90px),
     radial-gradient(600px 440px at 80% 2%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 65%),
     radial-gradient(760px 560px at 8% 18%, rgba(176, 197, 222, 0.6), rgba(176, 197, 222, 0) 60%),
     radial-gradient(680px 560px at 94% 44%, rgba(187, 205, 185, 0.55), rgba(187, 205, 185, 0) 60%),
@@ -43,20 +48,23 @@
     linear-gradient(170deg, #f0f2f5 0%, #e4e7eb 55%, #dcdfe4 100%);
 }
 
-html { color-scheme: light; }
+/* a flat mid-tone behind everything, so iOS overscroll never shows a seam */
+html { color-scheme: light; background: #e6e9ed; }
 
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   color: var(--ink);
   background: var(--room);
-  min-height: 100dvh;
+  /* the large viewport: the gradient runs under Safari's translucent toolbar too */
+  min-height: 100vh;
+  min-height: 100lvh;
 }
 
 .shell {
   max-width: 480px;
   margin: 0 auto;
-  padding: 12px 14px calc(96px + env(safe-area-inset-bottom));
+  padding: calc(12px + env(safe-area-inset-top)) 14px calc(96px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 14px;
