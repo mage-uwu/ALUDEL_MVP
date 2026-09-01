@@ -151,7 +151,7 @@ export default function App() {
 
 function Tabs() {
   return (
-    <nav className="tabs">
+    <nav className="tabs glass-pane">
       <button className="tab active">Templates</button>
       <button className="tab" disabled title="Next pass">Sites</button>
       <button className="tab" disabled title="Next pass">Ledger</button>
@@ -189,7 +189,7 @@ function Home({ onOpen }: { onOpen: (id: string) => void }) {
       <Tabs />
       {error && <p className="error">{error}</p>}
       {list?.map((t) => (
-        <button key={t.id} className="card template-card" onClick={() => onOpen(t.id)}>
+        <button key={t.id} className="card glass-frosted template-card" onClick={() => onOpen(t.id)}>
           <span className="template-name">{t.name}</span>
           <span className="version">v{t.version}</span>
         </button>
@@ -338,7 +338,7 @@ function TaskCard({
     );
 
   return (
-    <section className={`card task${dragging ? " dragging" : ""}`}>
+    <section className={`card glass-frosted task${dragging ? " dragging" : ""}`}>
       <div className="task-head">
         <input
           className="task-name"
