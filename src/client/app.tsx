@@ -90,13 +90,52 @@ function Terminal() {
 }
 
 const uid = () => crypto.randomUUID();
-const move = <T,>(xs: T[], i: number, dir: -1 | 1): T[] => {
-  const j = i + dir;
-  if (j < 0 || j >= xs.length) return xs;
+const reorder = <T,>(xs: T[], from: number, to: number): T[] => {
   const out = [...xs];
-  out.splice(j, 0, ...out.splice(i, 1));
+  out.splice(to, 0, ...out.splice(from, 1));
   return out;
 };
+
+// Touch-friendly drag-to-reorder over a vertical list. The handle carries
+// touch-action:none so the gesture never turns into a scroll; items reorder
+// live once the pointer crosses a sibling's midpoint.
+function useSortable(onMove: (from: number, to: number) => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(-1);
+  const at = useRef(-1);
+  const start = (index: number) => (e: React.PointerEvent) => {
+    if (e.button > 0) return;
+    e.preventDefault();
+    at.current = index;
+    setDragging(index);
+    const onPointerMove = (ev: PointerEvent) => {
+      const kids = ref.current ? ([...ref.current.children] as HTMLElement[]) : [];
+      const from = at.current;
+      let to = from;
+      kids.forEach((k, i) => {
+        const mid = k.getBoundingClientRect().top + k.offsetHeight / 2;
+        if (i < from && ev.clientY < mid) to = Math.min(to, i);
+        if (i > from && ev.clientY > mid) to = Math.max(to, i);
+      });
+      if (to !== from) {
+        onMove(from, to);
+        at.current = to;
+        setDragging(to);
+      }
+    };
+    const end = () => {
+      at.current = -1;
+      setDragging(-1);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+  return { ref, dragging, start };
+}
 
 export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -181,10 +220,15 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
     if (tpl) termDoc(dumpTemplate(tpl));
   }, [tpl]);
 
+  const taskSort = useSortable((from, to) =>
+    setTpl((p) => p && { ...p, tasks: reorder(p.tasks, from, to) })
+  );
+
   if (!tpl) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
 
+  // Functional updates so a drag's rapid successive moves never act on stale state.
   const patchTask = (taskId: string, fn: (t: Task) => Task) =>
-    setTpl({ ...tpl, tasks: tpl.tasks.map((t) => (t.id === taskId ? fn(t) : t)) });
+    setTpl((p) => p && { ...p, tasks: p.tasks.map((t) => (t.id === taskId ? fn(t) : t)) });
 
   const addTask = () =>
     setTpl({
@@ -240,15 +284,18 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
         aria-label="Template name"
       />
       {error && <p className="error">{error}</p>}
-      {tpl.tasks.map((task, i) => (
-        <TaskCard
-          key={task.id}
-          task={task}
-          patch={(fn) => patchTask(task.id, fn)}
-          onMove={(dir) => setTpl({ ...tpl, tasks: move(tpl.tasks, i, dir) })}
-          onRemove={() => setTpl({ ...tpl, tasks: tpl.tasks.filter((t) => t.id !== task.id) })}
-        />
-      ))}
+      <div className="task-list" ref={taskSort.ref}>
+        {tpl.tasks.map((task, i) => (
+          <TaskCard
+            key={task.id}
+            task={task}
+            dragging={taskSort.dragging === i}
+            patch={(fn) => patchTask(task.id, fn)}
+            onHandleDown={taskSort.start(i)}
+            onRemove={() => setTpl((p) => p && { ...p, tasks: p.tasks.filter((t) => t.id !== task.id) })}
+          />
+        ))}
+      </div>
       <button className="big-btn" onClick={addTask}>+ Add task</button>
       {dirty && (
         <div className="save-bar">
@@ -261,15 +308,21 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
 
 function TaskCard({
   task,
+  dragging,
   patch,
-  onMove,
+  onHandleDown,
   onRemove,
 }: {
   task: Task;
+  dragging: boolean;
   patch: (fn: (t: Task) => Task) => void;
-  onMove: (dir: -1 | 1) => void;
+  onHandleDown: (e: React.PointerEvent) => void;
   onRemove: () => void;
 }) {
+  const blockSort = useSortable((from, to) =>
+    patch((t) => ({ ...t, blocks: reorder(t.blocks, from, to) }))
+  );
+
   const addBlock = (kind: BlockKind) =>
     patch((t) => ({
       ...t,
@@ -285,7 +338,7 @@ function TaskCard({
     );
 
   return (
-    <section className="card task">
+    <section className={`card task${dragging ? " dragging" : ""}`}>
       <div className="task-head">
         <input
           className="task-name"
@@ -294,7 +347,7 @@ function TaskCard({
           onChange={(e) => patch((t) => ({ ...t, name: e.target.value }))}
           aria-label="Task name"
         />
-        <RowControls onMove={onMove} onRemove={onRemove} />
+        <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
       </div>
       <div className="cadence">
         <select
@@ -318,15 +371,18 @@ function TaskCard({
         </select>
       </div>
 
-      {task.blocks.map((block, i) => (
-        <BlockRow
-          key={block.id}
-          block={block}
-          onChange={(b) => patch((t) => ({ ...t, blocks: t.blocks.map((x) => (x.id === b.id ? b : x)) }))}
-          onMove={(dir) => patch((t) => ({ ...t, blocks: move(t.blocks, i, dir) }))}
-          onRemove={() => patch((t) => ({ ...t, blocks: t.blocks.filter((x) => x.id !== block.id) }))}
-        />
-      ))}
+      <div className="block-list" ref={blockSort.ref}>
+        {task.blocks.map((block, i) => (
+          <BlockRow
+            key={block.id}
+            block={block}
+            dragging={blockSort.dragging === i}
+            onChange={(b) => patch((t) => ({ ...t, blocks: t.blocks.map((x) => (x.id === b.id ? b : x)) }))}
+            onHandleDown={blockSort.start(i)}
+            onRemove={() => patch((t) => ({ ...t, blocks: t.blocks.filter((x) => x.id !== block.id) }))}
+          />
+        ))}
+      </div>
 
       <p className="outcomes-label">Outcomes</p>
       <div className="outcomes-grid">
@@ -366,17 +422,19 @@ function TaskCard({
 
 function BlockRow({
   block,
+  dragging,
   onChange,
-  onMove,
+  onHandleDown,
   onRemove,
 }: {
   block: Block;
+  dragging: boolean;
   onChange: (b: Block) => void;
-  onMove: (dir: -1 | 1) => void;
+  onHandleDown: (e: React.PointerEvent) => void;
   onRemove: () => void;
 }) {
   return (
-    <div className="block">
+    <div className={`block${dragging ? " dragging" : ""}`}>
       <div className="block-head">
         <input
           className="block-label"
@@ -385,7 +443,7 @@ function BlockRow({
           onChange={(e) => onChange({ ...block, label: e.target.value })}
           aria-label="Block label"
         />
-        <RowControls onMove={onMove} onRemove={onRemove} />
+        <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
       </div>
       {block.kind === "photo" && (
         <div className="photo-drop"><span className="lens" />Take or choose a photo</div>
@@ -408,11 +466,16 @@ function BlockRow({
   );
 }
 
-function RowControls({ onMove, onRemove }: { onMove: (dir: -1 | 1) => void; onRemove: () => void }) {
+function RowControls({
+  onHandleDown,
+  onRemove,
+}: {
+  onHandleDown: (e: React.PointerEvent) => void;
+  onRemove: () => void;
+}) {
   return (
     <span className="row-controls">
-      <button className="icon-btn" aria-label="Move up" onClick={() => onMove(-1)}>↑</button>
-      <button className="icon-btn" aria-label="Move down" onClick={() => onMove(1)}>↓</button>
+      <button className="icon-btn handle" aria-label="Drag to reorder" onPointerDown={onHandleDown}>⠿</button>
       <button className="icon-btn danger" aria-label="Remove" onClick={onRemove}>×</button>
     </span>
   );
