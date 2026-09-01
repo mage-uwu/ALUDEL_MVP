@@ -42,8 +42,10 @@ const starterDoc = () => ({
     {
       id: crypto.randomUUID(),
       name: "First task",
-      blocks: [{ id: crypto.randomUUID(), kind: "photo", label: "Photo", unit: "" }],
-      outcomes: [{ id: crypto.randomUUID(), label: "DONE" }],
+      blocks: [
+        { id: crypto.randomUUID(), kind: "photo", label: "Photo", unit: "" },
+        { id: crypto.randomUUID(), kind: "button", label: "DONE", unit: "" },
+      ],
     },
   ],
 });

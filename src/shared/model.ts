@@ -1,9 +1,9 @@
-// The single source of truth for what a template can be. The types make
-// invalid states unrepresentable (outcome buttons exist only in `outcomes`,
-// which is never empty) and `normalizeTemplate` is the server-side gate that
-// clamps any untrusted document into that shape or rejects it.
+// The single source of truth for what a template can be. A task is a name and
+// an ordered list of blocks; buttons are just another block kind, placed
+// wherever the author wants them. `normalizeTemplate` is the server-side gate
+// that clamps any untrusted document into that shape or rejects it.
 
-export type BlockKind = "photo" | "text" | "number";
+export type BlockKind = "photo" | "text" | "number" | "button";
 
 export interface Block {
   id: string;
@@ -12,16 +12,10 @@ export interface Block {
   unit: string; // meaningful for "number" only; kept empty otherwise
 }
 
-export interface Outcome {
-  id: string;
-  label: string;
-}
-
 export interface Task {
   id: string;
   name: string;
   blocks: Block[];
-  outcomes: Outcome[]; // always at least one — a task must have an outcome
 }
 
 export interface Template {
@@ -35,11 +29,17 @@ export const LIMITS = {
   unit: 12,
   tasks: 30,
   blocks: 20,
-  outcomes: 6,
   body: 128 * 1024,
 } as const;
 
-const BLOCK_KINDS: readonly BlockKind[] = ["photo", "text", "number"];
+const BLOCK_KINDS: readonly BlockKind[] = ["photo", "text", "number", "button"];
+
+const DEFAULT_LABEL: Record<BlockKind, string> = {
+  photo: "Photo",
+  text: "Text",
+  number: "Number",
+  button: "DONE",
+};
 
 const str = (v: unknown, max: number, fallback: string): string =>
   typeof v === "string" && v.trim() ? v.trim().slice(0, max) : fallback;
@@ -63,20 +63,24 @@ function normalizeTask(input: unknown): Task {
       return {
         id: id(b.id),
         kind,
-        label: str(b.label, LIMITS.label, { photo: "Photo", text: "Text", number: "Number" }[kind]),
+        label: str(b.label, LIMITS.label, DEFAULT_LABEL[kind]),
         unit: kind === "number" ? str(b.unit, LIMITS.unit, "").trim() : "",
       };
     });
-  // `endsWith` is the pre-rename key; accept it so older stored docs load.
-  const outcomes = arr(t.outcomes ?? t.endsWith, LIMITS.outcomes)
+  // `outcomes` (and its older name `endsWith`) was a task-bound button list;
+  // stored documents keep their buttons by landing them at the end of blocks.
+  const legacy = arr(t.outcomes ?? t.endsWith, LIMITS.blocks)
     .map(rec)
-    .map((b): Outcome => ({ id: id(b.id), label: str(b.label, LIMITS.label, "DONE") }));
-  if (outcomes.length === 0) outcomes.push({ id: crypto.randomUUID(), label: "DONE" });
+    .map((b): Block => ({
+      id: id(b.id),
+      kind: "button",
+      label: str(b.label, LIMITS.label, DEFAULT_LABEL.button),
+      unit: "",
+    }));
   return {
     id: id(t.id),
     name: str(t.name, LIMITS.name, "Untitled task"),
-    blocks,
-    outcomes,
+    blocks: [...blocks, ...legacy].slice(0, LIMITS.blocks),
   };
 }
 

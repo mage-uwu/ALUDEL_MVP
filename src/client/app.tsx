@@ -45,8 +45,11 @@ const dumpTemplate = (t: Loaded): string =>
     ...t.tasks.flatMap((k) => [
       ``,
       `  task "${k.name}"`,
-      ...k.blocks.map((b) => `    ${b.kind.padEnd(6)} "${b.label}"${b.unit ? `  (${b.unit})` : ""}`),
-      `    outcomes → ${k.outcomes.map((e) => `[${e.label.toUpperCase() || "?"}]`).join("  ")}`,
+      ...k.blocks.map((b) =>
+        b.kind === "button"
+          ? `    button [${b.label.toUpperCase() || "?"}]`
+          : `    ${b.kind.padEnd(6)} "${b.label}"${b.unit ? `  (${b.unit})` : ""}`
+      ),
     ]),
   ].join("\n");
 
@@ -241,7 +244,7 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
       ...tpl,
       tasks: [
         ...tpl.tasks,
-        { id: uid(), name: "New task", blocks: [], outcomes: [{ id: uid(), label: "DONE" }] },
+        { id: uid(), name: "New task", blocks: [] },
       ],
     });
 
@@ -364,14 +367,14 @@ function TaskCard({
       ...t,
       blocks: [
         ...t.blocks,
-        { id: uid(), kind, label: { photo: "Photo", text: "Text", number: "Number" }[kind], unit: "" },
+        {
+          id: uid(),
+          kind,
+          label: { photo: "Photo", text: "Text", number: "Number", button: "DONE" }[kind],
+          unit: "",
+        },
       ],
     }));
-
-  const addOutcome = () =>
-    patch((t) =>
-      t.outcomes.length >= 6 ? t : { ...t, outcomes: [...t.outcomes, { id: uid(), label: "DONE" }] }
-    );
 
   return (
     <section className={`card glass-frosted task${dragging ? " dragging" : ""}`}>
@@ -398,37 +401,11 @@ function TaskCard({
         ))}
       </div>
 
-      <p className="outcomes-label">Outcomes</p>
-      <div className="outcomes-grid">
-        {task.outcomes.map((b) => (
-          <span key={b.id} className="outcome-btn">
-            <input
-              value={b.label}
-              maxLength={60}
-              onChange={(e) =>
-                patch((t) => ({
-                  ...t,
-                  outcomes: t.outcomes.map((x) => (x.id === b.id ? { ...x, label: e.target.value } : x)),
-                }))
-              }
-              aria-label="Outcome label"
-            />
-            {task.outcomes.length > 1 && (
-              <button
-                className="x"
-                aria-label="Remove outcome"
-                onClick={() => patch((t) => ({ ...t, outcomes: t.outcomes.filter((x) => x.id !== b.id) }))}
-              >×</button>
-            )}
-          </span>
-        ))}
-      </div>
-
       <div className="add-row">
         <button onClick={() => addBlock("photo")}>+ Photo</button>
         <button onClick={() => addBlock("text")}>+ Text</button>
         <button onClick={() => addBlock("number")}>+ Number</button>
-        <button onClick={addOutcome}>+ Outcome</button>
+        <button onClick={() => addBlock("button")}>+ Button</button>
       </div>
     </section>
   );
@@ -447,6 +424,21 @@ function BlockRow({
   onHandleDown: (e: React.PointerEvent) => void;
   onRemove: () => void;
 }) {
+  if (block.kind === "button") {
+    return (
+      <div className={`block button-block${dragging ? " dragging" : ""}`}>
+        <input
+          className="button-key"
+          value={block.label}
+          maxLength={60}
+          onChange={(e) => onChange({ ...block, label: e.target.value })}
+          aria-label="Button label"
+        />
+        <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
+      </div>
+    );
+  }
+
   return (
     <div className={`block${dragging ? " dragging" : ""}`}>
       <div className="block-head">

@@ -2,8 +2,8 @@
 
 Dirt-simple form template builder on Cloudflare Workers + D1.
 
-**Model**: Templates → Tasks (molecules) → Blocks (atoms: Photo, Text, Number).
-Outcome buttons live only in a task's **Outcomes** section; every task keeps at least one —
+**Model**: Templates → Tasks (molecules) → Blocks (atoms: Photo, Text, Number, Button).
+A task is just a name and an ordered list of blocks; buttons are placed like any other block —
 invalid states are unrepresentable, and the server re-validates every document through the same
 `src/shared/model.ts` gate before it touches the database.
 
