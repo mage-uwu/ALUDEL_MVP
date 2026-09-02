@@ -49,10 +49,14 @@ the Optimize sheet says so. Each run is one `optimizeTours` call
 (30 s solver budget, 120 s above 40 stops, live traffic when the window starts within a day).
 
 **Assistant**: the console beside the phone on wide screens, and an Assistant screen in the menu
-on a phone, is a plain chat with xAI's Grok (`grok-4.6`). The Worker holds the key and adds a one-line
-system prompt; the client sends the conversation so far (up to 20 turns) and shows plain text
-back as it streams. Nothing else is wired into it yet: no team data, no tools. Set `XAI_API_KEY` as a secret;
-until then the pane says so.
+on a phone, is a chat with xAI's Grok (`grok-4.6`). The Worker holds the key and adds a one-line
+system prompt; replies stream back as plain text. Chats are saved: each user's live in their own
+SQLite-backed **Durable Object** (`ChatStore`, keyed by user id), so one user's chats are separate
+from everyone else's by construction, and the store scales per user rather than through one shared
+database. The caret on the console opens the index — new chat, recent chats, delete — and the chat
+you were in comes back on reload. The model sees the last 20 turns. Nothing else is wired in yet: no
+team data, no tools. Set `XAI_API_KEY` as a secret; until then the pane says so. The Durable Object
+needs no setup; Cloudflare provisions it on deploy.
 
 ## Auth and tenancy
 

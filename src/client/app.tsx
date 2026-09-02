@@ -153,15 +153,28 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ——— assistant: one plain chat with Grok, kept for the session across screens ———
+// ——— assistant: chats with Grok, each user's kept in their own store on the server ———
 interface Turn {
   role: "user" | "assistant";
   content: string;
 }
-const chat = { turns: [] as Turn[], subs: new Set<() => void>() };
-const setTurns = (turns: Turn[]) => {
+interface ChatMeta {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+// the open chat, shared by the console and the phone screen; the id is remembered across reloads
+const chat = { id: null as string | null, turns: [] as Turn[], index: false, subs: new Set<() => void>() };
+const notify = () => chat.subs.forEach((f) => f());
+const setChat = (id: string | null, turns: Turn[]) => {
+  chat.id = id;
   chat.turns = turns;
-  chat.subs.forEach((f) => f());
+  remember("chat", id);
+  notify();
+};
+const showIndex = (open: boolean) => {
+  chat.index = open;
+  notify();
 };
 
 // Aludel's face while the conversation is empty: it blinks now and then, and every third time it winks.
@@ -170,12 +183,19 @@ const FACE = { idle: "(≧◡≦)", blink: "(-_-)", wink: "(^◡-)", wink2: "(-�
 const Face = ({ of, hidden }: { of: string; hidden: boolean }) => (
   <span className={`face${hidden ? " out" : ""}`}>{[...of].map((g, i) => <span key={i} className="g">{g}</span>)}</span>
 );
-/** The face at either size: large on an empty console, small at the head of Aludel's latest line. */
+/** The face at either size: large on an empty console, small at the end of Aludel's latest line. */
 const Kaomoji = ({ mood, small }: { mood: keyof typeof FACE; small?: boolean }) => (
   <span className={`kaomoji${small ? " small" : ""}`} role="img" aria-label="Aludel">
     <Face of={FACE.idle} hidden={mood !== "idle"} />
     <Face of={FACE[mood]} hidden={mood === "idle"} />
   </span>
+);
+
+/** The caret that opens the index of chats. */
+const Caret = () => (
+  <button className={`term-caret${chat.index ? " open" : ""}`} aria-label="Chats" aria-expanded={chat.index} onClick={() => showIndex(!chat.index)}>
+    <ChevronRight size={20} />
+  </button>
 );
 
 function Chat({ enabled }: { enabled: boolean }) {
@@ -184,6 +204,8 @@ function Chat({ enabled }: { enabled: boolean }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [chats, setChats] = useState<ChatMeta[] | null>(null);
+  const [doomed, setDoomed] = useState<ChatMeta | null>(null);
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const f = () => force((x) => x + 1);
@@ -205,29 +227,56 @@ function Chat({ enabled }: { enabled: boolean }) {
       clearTimeout(back);
     };
   }, []);
+  // pick up where the last visit left off
+  useEffect(() => {
+    const last = recall("chat");
+    if (chat.id || chat.turns.length || !last) return;
+    open(last).catch(() => remember("chat", null));
+  }, []);
+  useEffect(() => {
+    if (chat.index) api<ChatMeta[]>("/chats").then(setChats, (e) => setError(e.message));
+  }, [chat.index]);
+
+  const open = async (id: string) => {
+    const c = await api<ChatMeta & { turns: Turn[] }>(`/chats/${id}`);
+    setChat(c.id, c.turns);
+    showIndex(false);
+  };
+  const remove = async () => {
+    if (!doomed) return;
+    try {
+      await api(`/chats/${doomed.id}`, { method: "DELETE" });
+      setChats((cs) => cs && cs.filter((c) => c.id !== doomed.id));
+      if (chat.id === doomed.id) setChat(null, []);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    setDoomed(null);
+  };
 
   const send = async () => {
     const content = draft.trim();
     if (!content || busy) return;
-    const turns = [...chat.turns, { role: "user" as const, content }].slice(-20);
-    setTurns(turns);
+    const turns = [...chat.turns, { role: "user" as const, content }];
+    setChat(chat.id, turns);
     setDraft("");
     setBusy(true);
     setError("");
     try {
       // the reply streams in as plain text; the last turn grows with it
-      const res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ turns }) });
+      const res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chatId: chat.id, content }) });
       if (res.status === 401) throw new Unauthorized("Sign in required");
       if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+      const id = res.headers.get("x-chat-id") ?? chat.id;
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let text = "";
-      setTurns([...turns, { role: "assistant", content: "" }]);
+      setChat(id, [...turns, { role: "assistant", content: "" }]);
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         text += decoder.decode(value, { stream: true });
-        setTurns([...turns, { role: "assistant", content: text }]);
+        setChat(id, [...turns, { role: "assistant", content: text }]);
       }
       if (!text.trim()) throw new Error("The assistant returned nothing");
     } catch (e) {
@@ -238,7 +287,7 @@ function Chat({ enabled }: { enabled: boolean }) {
   };
 
   return (
-    <>
+    <div className="term-pane">
       <div className="term-body" ref={body}>
         {chat.turns.length === 0 && (
           <div className="term-empty">
@@ -273,18 +322,45 @@ function Chat({ enabled }: { enabled: boolean }) {
         />
         <button className="term-send" type="submit" disabled={!enabled || busy || !draft.trim()} aria-label="Send">↵</button>
       </form>
-    </>
+
+      {chat.index && (
+        <div className="chat-index" role="dialog" aria-label="Chats">
+          <button className="chat-row new" onClick={() => { setChat(null, []); showIndex(false); }}>+ New chat</button>
+          {chats === null && <p className="term-hint">Loading…</p>}
+          {chats?.length === 0 && <p className="term-hint">No chats yet.</p>}
+          {chats?.map((c) => (
+            <div key={c.id} className={`chat-row${c.id === chat.id ? " current" : ""}`}>
+              <button className="chat-open" onClick={() => open(c.id).catch((e) => setError(e.message))}>
+                <span className="chat-title">{c.title}</span>
+                <span className="chat-when">{ago(c.updatedAt)}</span>
+              </button>
+              <button className="icon-btn danger" aria-label={`Delete ${c.title}`} onClick={() => setDoomed(c)}><X /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      {doomed && (
+        <Modal title="Delete this chat?" message={`“${doomed.title}” will be gone for good.`} action={{ label: "Delete", onClick: remove }} onClose={() => setDoomed(null)} />
+      )}
+    </div>
   );
 }
 
 /** The wide-screen pane: the assistant in a jet-black console. */
 function Console({ enabled }: { enabled: boolean }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const f = () => force((x) => x + 1);
+    chat.subs.add(f);
+    return () => void chat.subs.delete(f);
+  }, []);
   return (
     <aside className="terminal">
       <div className="term-bar">
         <span className="dot red" /><span className="dot yellow" /><span className="dot green" />
         <Logo size={14} className="term-mark" />
         <span className="term-title">aludel — assistant</span>
+        <Caret />
       </div>
       <Chat enabled={enabled} />
     </aside>
@@ -293,11 +369,18 @@ function Console({ enabled }: { enabled: boolean }) {
 
 /** The same assistant on a phone, as its own screen. */
 function AssistantScreen({ enabled, onBack }: { enabled: boolean; onBack: () => void }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const f = () => force((x) => x + 1);
+    chat.subs.add(f);
+    return () => void chat.subs.delete(f);
+  }, []);
   return (
     <div className="shell assistant">
       <header className="editor-top">
         <button className="icon-btn" onClick={onBack} aria-label="Back"><ChevronLeft /></button>
         <h1 className="site-title">Assistant</h1>
+        <Caret />
       </header>
       <div className="chat-card">
         <Chat enabled={enabled} />

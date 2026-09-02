@@ -10,7 +10,8 @@ import {
   type Role,
 } from "../shared/model";
 import { applyPlan, configured, optimize, readInput } from "./optimize";
-import { ask, readTurns } from "./chat";
+import { ask, CHAT, storeFor, type ChatStore } from "./chat";
+export { ChatStore } from "./chat";
 import {
   currentUser,
   finishLogin,
@@ -48,6 +49,8 @@ export interface Env {
   /** xAI key for the assistant (secret); XAI_ENDPOINT is a test hook standing in for api.x.ai/v1. */
   XAI_API_KEY?: string;
   XAI_ENDPOINT?: string;
+  /** Each user's chats, in that user's own Durable Object. */
+  CHATS: DurableObjectNamespace<ChatStore>;
 }
 
 const HEADERS = {
@@ -588,23 +591,41 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     });
   }
 
-  // the assistant: the client keeps the conversation, the Worker keeps the key
+  // ——— the assistant: each user's chats live in that user's own Durable Object ———
+  if (path === "/chats" && req.method === "GET") return json(await storeFor(env, user.id).list());
+  const chatRef = path.match(new RegExp(`^/chats/(${UUID})$`));
+  if (chatRef && req.method === "GET") {
+    const found = await storeFor(env, user.id).get(chatRef[1]!);
+    return found ? json({ ...found.meta, turns: found.turns }) : error(404, "Not found");
+  }
+  if (chatRef && req.method === "DELETE") {
+    return (await storeFor(env, user.id).remove(chatRef[1]!)) ? json({ ok: true }) : error(404, "Not found");
+  }
   if (path === "/chat" && req.method === "POST") {
     if (!env.XAI_API_KEY) return error(503, "The assistant is not set up for this deployment");
-    const turns = readTurns((await readBody(req))?.turns);
-    if (!turns) return error(422, "A conversation of up to 20 turns, ending with you");
+    const body = await readBody(req);
+    const content = field(body?.content, CHAT.chars);
+    if (!content) return error(422, "Say something first");
+    const ref = body?.chatId ?? null;
+    if (ref !== null && (typeof ref !== "string" || !new RegExp(`^${UUID}$`).test(ref))) return error(422, "Unknown chat");
+    const store = storeFor(env, user.id);
+    if (ref && !(await store.has(ref))) return error(404, "Not found");
+    // a first line starts a chat named after it; a failed first reply takes the chat back with it
+    const chatId = ref ?? (await store.create(content)).id;
     try {
       // an explicit identity encoding keeps the runtime from gzipping the stream, which would hold it
       // until the end; no-transform asks every hop in between for the same
-      return new Response(await ask(env, `aludel-${user.id}`, turns), {
+      return new Response(await ask(env, store, chatId, content), {
         headers: {
           ...HEADERS,
           "content-type": "text/plain; charset=utf-8",
           "content-encoding": "identity",
           "cache-control": "no-store, no-transform",
+          "x-chat-id": chatId,
         },
       });
     } catch (e) {
+      if (!ref) await store.remove(chatId);
       return error(502, (e as Error).message);
     }
   }
