@@ -1,5 +1,5 @@
 /// <reference types="@cloudflare/workers-types" />
-import { LIMITS, normalizePlace, normalizeTemplate, type AludelPlace } from "../shared/model";
+import { EMAIL_RE, LIMITS, normalizePlace, normalizeTemplate, type AludelPlace, type Role } from "../shared/model";
 import {
   currentUser,
   finishLogin,
@@ -9,7 +9,6 @@ import {
   requireMember,
   sameOrigin,
   startLogin,
-  type Role,
   type User,
 } from "./auth";
 import { ensureSchema } from "./schema";
@@ -57,8 +56,6 @@ async function readBody(req: Request): Promise<Record<string, unknown> | null> {
 const field = (v: unknown, max: number): string =>
   typeof v === "string" ? v.trim().slice(0, max) : "";
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 /** Up to 10 valid, lower-cased, de-duplicated addresses; anything else is dropped. */
 const emailsOf = (v: unknown): string[] => {
   if (!Array.isArray(v)) return [];
@@ -66,7 +63,7 @@ const emailsOf = (v: unknown): string[] => {
   for (const x of v) {
     if (typeof x !== "string") continue;
     const e = x.trim().toLowerCase();
-    if (e.length <= 160 && EMAIL.test(e) && !out.includes(e)) out.push(e);
+    if (e.length <= 160 && EMAIL_RE.test(e) && !out.includes(e)) out.push(e);
     if (out.length >= 10) break;
   }
   return out;
@@ -160,21 +157,30 @@ async function teamRoutes(
         .bind(id, teamId)
         .first<{ name: string; version: number; doc: string }>();
       if (!row) return error(404, "Not found");
-      const doc = normalizeTemplate({ name: row.name, ...JSON.parse(row.doc) });
+      const doc = normalizeTemplate({ ...JSON.parse(row.doc), name: row.name });
       return json({ id, version: row.version, ...doc });
     }
 
     if (req.method === "PUT" && id) {
-      const body = normalizeTemplate(await readBody(req));
-      if (!body) return error(422, "Invalid template");
+      const body = await readBody(req);
+      const doc = normalizeTemplate(body);
+      if (!doc) return error(422, "Invalid template");
+      // a save names the version it was edited from, so two people editing the
+      // same template can't silently overwrite each other
+      const from = typeof body?.version === "number" ? body.version : null;
       const row = await env.DB.prepare(
         `UPDATE templates SET name = ?, doc = ?, version = version + 1, updated_at = ?
-         WHERE id = ? AND team_id = ? RETURNING version`
+         WHERE id = ? AND team_id = ? AND (? IS NULL OR version = ?) RETURNING version`
       )
-        .bind(body.name, JSON.stringify({ tasks: body.tasks }), nowIso(), id, teamId)
+        .bind(doc.name, JSON.stringify({ tasks: doc.tasks }), nowIso(), id, teamId, from, from)
         .first<{ version: number }>();
-      if (!row) return error(404, "Not found");
-      return json({ id, version: row.version });
+      if (row) return json({ id, version: row.version });
+      const exists = await env.DB.prepare("SELECT 1 AS hit FROM templates WHERE id = ? AND team_id = ?")
+        .bind(id, teamId)
+        .first();
+      return exists
+        ? error(409, "Someone saved this template after you opened it. Go back and reopen it to see their version.")
+        : error(404, "Not found");
     }
 
     if (req.method === "DELETE" && id) {
@@ -460,7 +466,7 @@ async function teamRoutes(
       const body = await readBody(req);
       const email = field(body?.email, 160).toLowerCase();
       const inviteRole = field(body?.role, 10) || "member";
-      if (!EMAIL.test(email)) return error(422, "Invalid email");
+      if (!EMAIL_RE.test(email)) return error(422, "Invalid email");
       if (!["admin", "member"].includes(inviteRole)) return error(422, "Invalid role");
 
       const already = await env.DB.prepare(

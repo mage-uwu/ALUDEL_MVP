@@ -5,7 +5,8 @@ Dirt-simple form template builder on Cloudflare Workers + D1.
 **Templates**: Templates → Tasks (molecules) → Blocks (atoms: Photo, Text, Number, Button).
 A task is just a name and an ordered list of blocks; buttons are placed like any other block —
 invalid states are unrepresentable, and the server re-validates every document through the same
-`src/shared/model.ts` gate before it touches the database.
+`src/shared/model.ts` gate before it touches the database. A save names the version it was
+edited from, so two people on the same template get a 409 instead of silently overwriting each other.
 
 **Sites**: Lists → Worksites → Dispatches. A worksite is a client name, a location and up to ten
 contact emails, sitting in at most one list (lists are containers of worksites). A location is a

@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
+import type { Role } from "../shared/model";
 import type { Env } from "./index";
 
-export type Role = "owner" | "admin" | "member";
 export const ROLE_RANK: Record<Role, number> = { member: 0, admin: 1, owner: 2 };
 
 export interface User {
@@ -101,8 +101,9 @@ export async function canSignIn(db: D1Database, allowList: string, email: string
 export async function startLogin(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
   const raw = url.searchParams.get("return") ?? "/";
-  // never bounce to an attacker-supplied absolute URL
-  const returnTo = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+  // a same-site path only: never an absolute URL, and never the `//host` or
+  // `/\host` forms browsers read as one
+  const returnTo = /^\/(?![\/\\])\S*$/.test(raw) ? raw : "/";
 
   const flowId = randomToken();
   const state = randomToken();
@@ -110,11 +111,15 @@ export async function startLogin(req: Request, env: Env): Promise<Response> {
   const verifier = randomToken();
   const challenge = await hashToken(verifier);
 
-  await env.DB.prepare(
-    "INSERT INTO login_flows (id, state, verifier, nonce, return_to, expires_at) VALUES (?, ?, ?, ?, ?, ?)"
-  )
-    .bind(await hashToken(flowId), state, verifier, nonce, returnTo, plus(FLOW_TTL_S))
-    .run();
+  await env.DB.batch([
+    // the one unauthenticated write path also sweeps what it and sign-in leave behind,
+    // so abandoned flows and dead sessions can't pile up
+    env.DB.prepare("DELETE FROM login_flows WHERE expires_at < ?").bind(iso(now())),
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(iso(now())),
+    env.DB.prepare(
+      "INSERT INTO login_flows (id, state, verifier, nonce, return_to, expires_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(await hashToken(flowId), state, verifier, nonce, returnTo, plus(FLOW_TTL_S)),
+  ]);
 
   const auth = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   auth.search = new URLSearchParams({
@@ -167,8 +172,8 @@ function readClaims(idToken: string): IdClaims | null {
   const parts = idToken.split(".");
   if (parts.length !== 3 || !parts[1]) return null;
   try {
-    const json = atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"));
-    return JSON.parse(decodeURIComponent(escape(json))) as IdClaims;
+    const bytes = Uint8Array.from(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes)) as IdClaims;
   } catch {
     return null;
   }

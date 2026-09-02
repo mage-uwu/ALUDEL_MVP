@@ -5,6 +5,11 @@
 
 export type BlockKind = "photo" | "text" | "number" | "button";
 
+export type Role = "owner" | "admin" | "member";
+
+/** Shape check only: real validation is the mail that arrives. Shared so both sides agree. */
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export interface Block {
   id: string;
   kind: BlockKind;

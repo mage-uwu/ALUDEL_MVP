@@ -2,15 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Logo } from "./logo";
 import { Check, ChevronLeft, ChevronRight, Grip, More, Pencil, Plus, X } from "./icons";
 import {
+  EMAIL_RE,
   type AludelPlace,
   type Block,
   type BlockKind,
+  type Role,
   type Task,
   type Template,
 } from "../shared/model";
 import { loadMaps, PLACE_FIELDS, toAludelPlace } from "./maps";
-
-type Role = "owner" | "admin" | "member";
 
 interface Account {
   id: string;
@@ -269,7 +269,7 @@ export default function App() {
           return (keep ?? m.teams[0])?.id ?? null;
         });
       },
-      (e) => setMe(e instanceof Unauthorized ? null : null)
+      () => setMe(null)
     );
 
   useEffect(() => {
@@ -643,7 +643,7 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
       const body = { name: tpl.name, tasks: tpl.tasks };
       const { version } = await api<{ version: number }>(`/teams/${teamId}/templates/${id}`, {
         method: "PUT",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, version: tpl.version }),
       });
       setTpl({ ...tpl, version });
       setSaved(JSON.stringify(body));
@@ -1565,10 +1565,6 @@ function ListSheet({
       oops(e);
     }
   };
-  const cancelEdit = () => {
-    if (!alertOpen.current) setEditing(null);
-  };
-
   const remove = (l: ListRef) =>
     setAlert({
       title: `Delete “${l.name}”?`,
@@ -1590,24 +1586,14 @@ function ListSheet({
 
   const row = (id: string | null, name: string, l?: ListRef) =>
     editing !== null && editing === id ? (
-      <div key={id ?? "none"} className="member-row dispatch-row">
-        <input
-          className="text-input left"
-          autoFocus
-          value={editDraft}
-          maxLength={80}
-          onChange={(ev) => setEditDraft(ev.target.value)}
-          onKeyDown={(ev) => {
-            if (ev.key === "Enter") (ev.preventDefault(), commitEdit());
-            if (ev.key === "Escape") setEditing(null);
-          }}
-          onBlur={cancelEdit}
-          aria-label={`Rename ${name}`}
-        />
-        <button className="icon-btn" aria-label="Save name" onPointerDown={(ev) => ev.preventDefault()} onClick={commitEdit}>
-          <Check size={18} />
-        </button>
-      </div>
+      <EditRow
+        key={id}
+        value={editDraft}
+        label={`Rename ${name}`}
+        onChange={setEditDraft}
+        onCommit={commitEdit}
+        onCancel={(forced) => (forced || !alertOpen.current) && setEditing(null)}
+      />
     ) : (
       <div key={id ?? "none"} className="member-row dispatch-row">
         <button
@@ -1667,8 +1653,6 @@ function ListSheet({
   );
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 /** Fullscreen editor for a site's contact emails. Mistakes surface as a modal, not a banner. */
 function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: string[]) => void }) {
   const [list, setList] = useState(emails);
@@ -1711,11 +1695,6 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
     setList(list.map((x, i) => (i === editing ? editDraft.trim().toLowerCase() : x)));
     setEditing(null);
   };
-  const cancelEdit = () => {
-    if (alertOpen.current) return;
-    setEditing(null);
-  };
-
   return (
     <div className="sheet">
       <div className="shell editor">
@@ -1728,32 +1707,15 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
         <section className="card glass-frosted task">
           {list.map((e, i) =>
             editing === i ? (
-              <div key={e} className="member-row dispatch-row">
-                <input
-                  className="text-input left"
-                  type="email"
-                  inputMode="email"
-                  autoCapitalize="none"
-                  autoFocus
-                  value={editDraft}
-                  maxLength={160}
-                  onChange={(ev) => setEditDraft(ev.target.value)}
-                  onKeyDown={(ev) => {
-                    if (ev.key === "Enter") (ev.preventDefault(), commitEdit());
-                    if (ev.key === "Escape") setEditing(null);
-                  }}
-                  onBlur={cancelEdit}
-                  aria-label={`Edit ${e}`}
-                />
-                <button
-                  className="icon-btn"
-                  aria-label="Save email"
-                  onPointerDown={(ev) => ev.preventDefault()}
-                  onClick={commitEdit}
-                >
-                  <Check size={18} />
-                </button>
-              </div>
+              <EditRow
+                key={e}
+                email
+                value={editDraft}
+                label={`Edit ${e}`}
+                onChange={setEditDraft}
+                onCommit={commitEdit}
+                onCancel={(forced) => (forced || !alertOpen.current) && setEditing(null)}
+              />
             ) : (
               <div key={e} className="member-row dispatch-row">
                 <button className="email-name email-edit" onClick={() => startEdit(i)} aria-label={`Edit ${e}`}>
@@ -1788,6 +1750,49 @@ function EmailsSheet({ emails, onDone }: { emails: string[]; onDone: (emails: st
       </div>
 
       {alert && <Modal title={alert.title} message={alert.message} onClose={() => setAlert(null)} />}
+    </div>
+  );
+}
+
+/**
+ * A row being edited in place. Enter or the tick commits; Escape cancels
+ * outright (forced), and focus leaving the field cancels unless the caller
+ * says otherwise — a modal pointing out a mistake must not end the edit.
+ */
+function EditRow({
+  value,
+  label,
+  email,
+  onChange,
+  onCommit,
+  onCancel,
+}: {
+  value: string;
+  label: string;
+  email?: boolean;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+  onCancel: (forced: boolean) => void;
+}) {
+  return (
+    <div className="member-row dispatch-row">
+      <input
+        className="text-input left"
+        autoFocus
+        value={value}
+        maxLength={email ? 160 : 80}
+        {...(email ? { type: "email", inputMode: "email" as const, autoCapitalize: "none" } : {})}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.preventDefault(), onCommit());
+          if (e.key === "Escape") onCancel(true);
+        }}
+        onBlur={() => onCancel(false)}
+        aria-label={label}
+      />
+      <button className="icon-btn" aria-label="Save" onPointerDown={(e) => e.preventDefault()} onClick={onCommit}>
+        <Check size={18} />
+      </button>
     </div>
   );
 }
