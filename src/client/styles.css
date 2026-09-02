@@ -982,14 +982,17 @@ button.stop-row:active { background: rgba(255, 255, 255, 0.55); }
 .face .g { display: inline-block; width: 0.78em; text-align: center; }
 /* in the conversation the face is text-sized and inline, trailing the text like a cursor */
 .kaomoji { display: block; }
+/* the small face shares the text's baseline: both moods occupy one inline grid cell, so the
+   line box is real and nothing is absolutely positioned */
 .kaomoji.small {
-  display: inline-block;
+  display: inline-grid;
   vertical-align: baseline;
   width: 3.9em;
-  height: 1.2em;
+  height: auto;
   margin: 0 0 0 0.6em;
-  font-size: 13px;
+  font-size: inherit;
   font-weight: 700;
+  line-height: inherit;
   text-shadow: none;
 }
-.kaomoji.small .face { line-height: 1.2; }
+.kaomoji.small .face { position: static; grid-area: 1 / 1; }
