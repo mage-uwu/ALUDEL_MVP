@@ -39,6 +39,14 @@ export function credentials(env: Env): Credentials | null {
 }
 export const configured = (env: Env) => credentials(env) !== null;
 
+/**
+ * PEM → raw base64. The key may carry real newlines, the literal two-character
+ * \n of a one-line secret field, or both; the literal form goes first, whole,
+ * so its "n" never lands inside the key body.
+ */
+export const keyBody = (pem: string) =>
+  pem.replace(/\\[nr]/g, "").replace(/-----[^-]+-----/g, "").replace(/[^A-Za-z0-9+/=]/g, "");
+
 const b64url = (bytes: ArrayBuffer | Uint8Array) => {
   let bin = "";
   for (const b of new Uint8Array(bytes)) bin += String.fromCharCode(b);
@@ -60,12 +68,9 @@ async function accessToken(env: Env, sa: Credentials): Promise<string> {
     iat,
     exp: iat + 3600,
   })}`;
-  // the key arrives as PEM, with real newlines or the literal \n of a one-line secret field:
-  // drop the armour and anything that is not base64
-  const der = sa.privateKey.replace(/-----[^-]+-----/g, "").replace(/[^A-Za-z0-9+/=]/g, "");
   const key = await crypto.subtle.importKey(
     "pkcs8",
-    Uint8Array.from(atob(der), (c) => c.charCodeAt(0)),
+    Uint8Array.from(atob(keyBody(sa.privateKey)), (c) => c.charCodeAt(0)),
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["sign"]
