@@ -164,12 +164,16 @@ const setTurns = (turns: Turn[]) => {
   chat.subs.forEach((f) => f());
 };
 
-// Aludel's face while the conversation is empty: it blinks now and then, and every third time it winks
-const FACE = { idle: "(≧◡≦)", blink: "(－◡－)", wink: "(≧◡－)" };
+// Aludel's face while the conversation is empty: it blinks now and then, and every third time it winks.
+// Each glyph sits in a fixed slot and moods crossfade, so the face never jumps.
+const FACE = { idle: "(≧◡≦)", blink: "(^◡^)", wink: "(≧◡^)" };
+const Face = ({ of, hidden }: { of: string; hidden: boolean }) => (
+  <span className={`face${hidden ? " out" : ""}`}>{[...of].map((g, i) => <span key={i} className="g">{g}</span>)}</span>
+);
 
 function Chat({ enabled }: { enabled: boolean }) {
   const [, force] = useState(0);
-  const [face, setFace] = useState(FACE.idle);
+  const [mood, setMood] = useState<keyof typeof FACE>("idle");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -186,9 +190,9 @@ function Chat({ enabled }: { enabled: boolean }) {
     let n = 0;
     let back = 0;
     const tick = setInterval(() => {
-      setFace(++n % 3 ? FACE.blink : FACE.wink);
-      back = window.setTimeout(() => setFace(FACE.idle), n % 3 ? 160 : 420);
-    }, 3200);
+      setMood(++n % 3 ? "blink" : "wink");
+      back = window.setTimeout(() => setMood("idle"), n % 3 ? 220 : 520);
+    }, 3400);
     return () => {
       clearInterval(tick);
       clearTimeout(back);
@@ -218,7 +222,10 @@ function Chat({ enabled }: { enabled: boolean }) {
       <div className="term-body" ref={body}>
         {chat.turns.length === 0 && (
           <div className="term-empty">
-            <div className="kaomoji" role="img" aria-label="Aludel">{face}</div>
+            <div className="kaomoji" role="img" aria-label="Aludel">
+              <Face of={FACE.idle} hidden={mood !== "idle"} />
+              <Face of={FACE[mood]} hidden={mood === "idle"} />
+            </div>
             <p className="term-hint">
               {enabled ? "Ask Aludel anything." : "The assistant isn't set up for this deployment (XAI_API_KEY)."}
             </p>
