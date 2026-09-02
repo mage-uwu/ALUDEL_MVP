@@ -18,6 +18,35 @@ template for a worksite: the dispatch references the template rather than copyin
 version it was borrowed at, and the site's metadata rides along by association. A site can hold
 one dispatch per template, and deleting a list leaves its sites in place, unlisted.
 
+**Map**: every located site on one map, pinned and numbered by list, with a line through each
+list in its stored order. **Optimize** hands all located sites to the Google Maps Platform
+**Route Optimization API** (a fleet VRP solver — not the Routes API, not Fleet Engine) for N
+routes, an optional depot, a per-stop service time and a day window, then shows the plan: ordered
+stops per route with arrival times, skipped sites with Google's reason, distance, time and cost.
+*Apply to lists* turns it into lists named `Route 1…N`, sites in visit order, and the map draws
+Google's road polylines for any list that still matches its route. Plans are built only from the
+stored `AludelPlace` records; the plan itself is stored on the team, and every vehicle carries
+`costPerHour` and `costPerKilometer` so the solver has something real to minimise.
+
+### Route Optimization setup
+
+The API takes OAuth only, so the Worker signs in as a service account (RS256 JWT → access token,
+cached per isolate). In the same Cloud project:
+
+1. Enable **Route Optimization API**.
+2. IAM → Service accounts → create one, grant it the **Route Optimization Editor** role, and
+   create a JSON key.
+3. Give the Worker three secrets from that key file:
+
+```sh
+wrangler secret put GOOGLE_CLOUD_PROJECT     # project_id
+wrangler secret put GOOGLE_SA_EMAIL          # client_email
+wrangler secret put GOOGLE_SA_PRIVATE_KEY    # private_key (the PEM; literal \n is fine)
+```
+
+Until all three are set the Optimize sheet says so. Each run is one `optimizeTours` call
+(30 s solver budget, 120 s above 40 stops, live traffic when the window starts within a day).
+
 ## Auth and tenancy
 
 Sign-in is Google OAuth (authorization code + PKCE, with `state` and `nonce`), and every

@@ -12,9 +12,12 @@ const TABLES = [
      picture TEXT NOT NULL DEFAULT '',
      created_at TEXT NOT NULL
    )`,
+  // depot: where routes start and end (AludelPlace JSON); plan: the latest RoutePlan
   `CREATE TABLE IF NOT EXISTS teams (
      id TEXT PRIMARY KEY,
      name TEXT NOT NULL,
+     depot TEXT,
+     plan TEXT,
      created_at TEXT NOT NULL
    )`,
   `CREATE TABLE IF NOT EXISTS memberships (
@@ -68,6 +71,7 @@ const TABLES = [
      address TEXT NOT NULL DEFAULT '',
      place TEXT,
      location_note TEXT NOT NULL DEFAULT '',
+     position INTEGER NOT NULL DEFAULT 0,
      emails TEXT NOT NULL DEFAULT '[]',
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
@@ -122,6 +126,10 @@ export function ensureSchema(db: D1Database): Promise<unknown> {
     // sites created before locations were real places (address is now derived from place)
     await addColumn("ALTER TABLE sites ADD COLUMN place TEXT");
     await addColumn("ALTER TABLE sites ADD COLUMN location_note TEXT NOT NULL DEFAULT ''");
+    // route order within a list, and the team's depot + latest plan
+    await addColumn("ALTER TABLE sites ADD COLUMN position INTEGER NOT NULL DEFAULT 0");
+    await addColumn("ALTER TABLE teams ADD COLUMN depot TEXT");
+    await addColumn("ALTER TABLE teams ADD COLUMN plan TEXT");
     await db.batch(INDEXES.map((sql) => db.prepare(sql)));
   })()).catch((e) => {
     ready = null;

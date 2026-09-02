@@ -5,9 +5,11 @@ import {
   LIMITS,
   normalizePlace,
   normalizeTemplate,
+  parsePlace,
   type AludelPlace,
   type Role,
 } from "../shared/model";
+import { applyPlan, configured, optimize, readInput } from "./optimize";
 import {
   currentUser,
   finishLogin,
@@ -21,6 +23,7 @@ import {
 } from "./auth";
 import { ensureSchema } from "./schema";
 
+
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
@@ -33,6 +36,12 @@ export interface Env {
   GOOGLE_MAPS_BROWSER_KEY?: string;
   /** Map ID (Cloud-based map style); advanced markers need one. Defaults to Google's demo id. */
   GOOGLE_MAPS_MAP_ID?: string;
+  /** Route Optimization API: the Cloud project and a service account that may call it (secrets). */
+  GOOGLE_CLOUD_PROJECT?: string;
+  GOOGLE_SA_EMAIL?: string;
+  GOOGLE_SA_PRIVATE_KEY?: string;
+  /** Test hook only: a base URL standing in for Google's token and optimizeTours endpoints. */
+  OPTIMIZE_ENDPOINT?: string;
 }
 
 const HEADERS = {
@@ -83,16 +92,6 @@ const parseEmails = (raw: unknown): string[] => {
     return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
   } catch {
     return [];
-  }
-};
-
-/** A stored place column back into a record; anything that no longer validates reads as no place. */
-const parsePlace = (v: unknown): AludelPlace | null => {
-  if (typeof v !== "string" || !v) return null;
-  try {
-    return normalizePlace(JSON.parse(v));
-  } catch {
-    return null;
   }
 };
 
@@ -261,16 +260,16 @@ async function teamRoutes(
   if (rest === "/sites") {
     if (req.method === "GET") {
       const { results } = await env.DB.prepare(
-        `SELECT s.id, s.client_name AS clientName, s.address, s.emails,
+        `SELECT s.id, s.client_name AS clientName, s.address, s.place, s.position, s.emails,
                 s.list_id AS listId, l.name AS listName,
                 (SELECT COUNT(*) FROM dispatches d WHERE d.site_id = s.id) AS dispatches
          FROM sites s LEFT JOIN lists l ON l.id = s.list_id
          WHERE s.team_id = ?
-         ORDER BY l.name IS NULL, l.name, s.client_name`
+         ORDER BY l.name IS NULL, l.name, s.position, s.client_name`
       )
         .bind(teamId)
         .all();
-      return json(results.map((r) => ({ ...r, emails: parseEmails(r.emails) })));
+      return json(results.map((r) => ({ ...r, place: parsePlace(r.place), emails: parseEmails(r.emails) })));
     }
     if (req.method === "POST") {
       const body = await readBody(req);
@@ -519,6 +518,38 @@ async function teamRoutes(
     return json({ ok: true });
   }
 
+  // ——— routes: the depot, the latest plan, a new plan, and applying it to lists ———
+  if (rest === "/plan" && req.method === "GET") {
+    const team = await env.DB.prepare("SELECT depot, plan FROM teams WHERE id = ?")
+      .bind(teamId)
+      .first<{ depot: string | null; plan: string | null }>();
+    return json({ depot: parsePlace(team?.depot), plan: team?.plan ? JSON.parse(team.plan) : null });
+  }
+  if (rest === "/plan" && req.method === "POST") {
+    if (!admin) return error(403, "Admins only");
+    if (!configured(env)) return error(503, "Route optimization is not set up for this deployment");
+    const ask = readInput(await readBody(req));
+    if (!ask) return error(422, "Routes must be 1–10, service 0–240 minutes, and the window a day at most");
+    try {
+      return json(await optimize(env, teamId, ask));
+    } catch (e) {
+      return error(422, (e as Error).message);
+    }
+  }
+  if (rest === "/plan/apply" && req.method === "POST") {
+    if (!admin) return error(403, "Admins only");
+    return (await applyPlan(env, teamId)) ? json({ ok: true }) : error(404, "No plan to apply");
+  }
+  if (rest === "/depot" && req.method === "PUT") {
+    if (!admin) return error(403, "Admins only");
+    const place = placeOf((await readBody(req))?.place);
+    if (place === undefined) return error(422, "Invalid place");
+    await env.DB.prepare("UPDATE teams SET depot = ? WHERE id = ?")
+      .bind(place ? JSON.stringify(place) : null, teamId)
+      .run();
+    return json({ ok: true });
+  }
+
   if (rest === "" && req.method === "DELETE") {
     if (role !== "owner") return error(403, "Owners only");
     await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(teamId).run();
@@ -542,7 +573,11 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     return json({
       user,
       teams: results,
-      maps: { key: env.GOOGLE_MAPS_BROWSER_KEY || null, mapId: env.GOOGLE_MAPS_MAP_ID || "DEMO_MAP_ID" },
+      maps: {
+        key: env.GOOGLE_MAPS_BROWSER_KEY || null,
+        mapId: env.GOOGLE_MAPS_MAP_ID || "DEMO_MAP_ID",
+        optimize: configured(env),
+      },
     });
   }
 

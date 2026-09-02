@@ -166,6 +166,39 @@ const ADDRESS_KEYS: readonly (keyof AddressParts)[] = [
 const num = (v: unknown, min: number, max: number): number | null =>
   typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : null;
 
+/** A stored place column (JSON text) back into a record; anything that no longer validates reads as no place. */
+export const parsePlace = (v: unknown): AludelPlace | null => {
+  if (typeof v !== "string" || !v) return null;
+  try {
+    return normalizePlace(JSON.parse(v));
+  } catch {
+    return null;
+  }
+};
+
+// A route plan: what the Route Optimization API answered, mapped back onto the
+// team's sites. Produced only by the server, stored on the team, read by the map.
+export interface RouteStop {
+  siteId: string;
+  clientName: string;
+  lat: number;
+  lng: number;
+  arrival: string;
+}
+export interface RoutePlan {
+  createdAt: string;
+  routes: {
+    label: string;
+    stops: RouteStop[];
+    distanceMeters: number;
+    durationSeconds: number;
+    /** Encoded road polyline for the whole route, empty if Google gave none. */
+    polyline: string;
+  }[];
+  skipped: { siteId: string; clientName: string; reason: string }[];
+  metrics: { travelDistanceMeters: number; totalDurationSeconds: number; totalCost: number; usedVehicleCount: number };
+}
+
 /**
  * Clamp an untrusted place into a valid AludelPlace, or null if it cannot be one:
  * no Google id, no usable coordinates, nothing to call it by, or no fetch time.

@@ -17,7 +17,20 @@ declare namespace google.maps {
     lng(): number;
   }
   class LatLngBounds {
+    constructor();
+    extend(point: LatLngLiteral): LatLngBounds;
     toJSON(): LatLngBoundsLiteral;
+  }
+  interface PolylineOptions {
+    map?: Map | null;
+    path: LatLngLiteral[];
+    strokeColor?: string;
+    strokeWeight?: number;
+    strokeOpacity?: number;
+  }
+  class Polyline {
+    constructor(opts: PolylineOptions);
+    setMap(map: Map | null): void;
   }
   interface MapOptions {
     mapId?: string;
@@ -36,9 +49,17 @@ declare namespace google.maps {
   }
   interface MapsLibrary {
     Map: typeof Map;
+    Polyline: typeof Polyline;
   }
   interface MarkerLibrary {
     AdvancedMarkerElement: typeof marker.AdvancedMarkerElement;
+    PinElement: typeof marker.PinElement;
+  }
+  interface GeometryLibrary {
+    encoding: typeof geometry.encoding;
+  }
+  namespace geometry.encoding {
+    function decodePath(encoded: string): LatLng[];
   }
   interface PlacesLibrary {
     PlaceAutocompleteElement: typeof places.PlaceAutocompleteElement;
@@ -46,12 +67,18 @@ declare namespace google.maps {
   function importLibrary(name: "maps"): Promise<MapsLibrary>;
   function importLibrary(name: "marker"): Promise<MarkerLibrary>;
   function importLibrary(name: "places"): Promise<PlacesLibrary>;
+  function importLibrary(name: "geometry"): Promise<GeometryLibrary>;
 
   namespace marker {
     interface AdvancedMarkerElementOptions {
       map?: Map | null;
       position?: LatLngLiteral | null;
       title?: string;
+      content?: Element | null;
+    }
+    class PinElement {
+      constructor(opts?: { background?: string; borderColor?: string; glyphColor?: string; glyph?: string; scale?: number });
+      element: HTMLElement;
     }
     class AdvancedMarkerElement extends HTMLElement {
       constructor(opts?: AdvancedMarkerElementOptions);

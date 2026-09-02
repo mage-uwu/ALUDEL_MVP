@@ -11,6 +11,7 @@ import {
   type Block,
   type BlockKind,
   type Role,
+  type RoutePlan,
   type Task,
   type Template,
 } from "../shared/model";
@@ -31,6 +32,8 @@ interface TeamRef {
 interface MapsConfig {
   key: string | null;
   mapId: string;
+  /** Whether the server holds Route Optimization credentials. */
+  optimize: boolean;
 }
 interface Me {
   user: Account;
@@ -51,7 +54,12 @@ interface Invite {
   expiresAt: string;
 }
 
-type Section = "templates" | "sites";
+type Section = "templates" | "sites" | "map";
+const SECTIONS: { key: Section; title: string }[] = [
+  { key: "templates", title: "Templates" },
+  { key: "sites", title: "Sites" },
+  { key: "map", title: "Map" },
+];
 
 interface ListRef {
   id: string;
@@ -62,6 +70,8 @@ interface SiteRow {
   id: string;
   clientName: string;
   address: string;
+  place: AludelPlace | null;
+  position: number;
   emails: string[];
   listId: string | null;
   listName: string | null;
@@ -259,7 +269,7 @@ export default function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [teamId, setTeamId] = useState<string | null>(() => recall("team"));
   const [screen, setScreen] = useState<"templates" | "members">("templates");
-  const [section, setSection] = useState<Section>(() => (recall("section") === "sites" ? "sites" : "templates"));
+  const [section, setSection] = useState<Section>(() => SECTIONS.find((s) => s.key === recall("section"))?.key ?? "templates");
   const [openId, setOpenId] = useState<string | null>(null);
   const [openSite, setOpenSite] = useState<string | null>(null);
   const inviteToken = location.pathname.startsWith("/invite/")
@@ -310,11 +320,9 @@ export default function App() {
         onSwitch={setTeamId}
       />
     );
-    return section === "sites" ? (
-      <Sites team={team} head={head} onOpen={setOpenSite} />
-    ) : (
-      <Home team={team} head={head} onOpen={setOpenId} />
-    );
+    if (section === "sites") return <Sites team={team} head={head} onOpen={setOpenSite} />;
+    if (section === "map") return <MapScreen team={team} head={head} me={me} onOpen={setOpenSite} />;
+    return <Home team={team} head={head} onOpen={setOpenId} />;
   };
 
   return (
@@ -471,7 +479,7 @@ function HomeHeader({
     <header className="home-head">
       <Logo size={30} className="home-mark" />
       <div className="home-title">
-        <h1>{section === "sites" ? "Sites" : "Templates"}</h1>
+        <h1>{SECTIONS.find((s) => s.key === section)?.title}</h1>
         <span className="team-name">{team.name}</span>
       </div>
       <div className="menu-wrap">
@@ -487,16 +495,16 @@ function HomeHeader({
           <>
             <div className="menu-scrim" onClick={() => setMenu(false)} />
             <div className="menu" role="menu">
-              {(["templates", "sites"] as const).map((sec) => (
+              {SECTIONS.map((sec) => (
                 <button
-                  key={sec}
-                  className={`menu-item${section === sec ? " current" : ""}`}
+                  key={sec.key}
+                  className={`menu-item${section === sec.key ? " current" : ""}`}
                   role="menuitemradio"
-                  aria-checked={section === sec}
-                  onClick={() => { setMenu(false); onSection(sec); }}
+                  aria-checked={section === sec.key}
+                  onClick={() => { setMenu(false); onSection(sec.key); }}
                 >
-                  {sec === "templates" ? "Templates" : "Sites"}
-                  {section === sec && <span className="tick" aria-hidden="true"><Check /></span>}
+                  {sec.title}
+                  {section === sec.key && <span className="tick" aria-hidden="true"><Check /></span>}
                 </button>
               ))}
               <div className="menu-sep" />
@@ -1419,11 +1427,12 @@ function PlaceSheet({
 }: {
   maps: MapsConfig;
   place: AludelPlace | null;
-  note: string;
+  /** Omit for a place that carries no note, such as the depot. */
+  note?: string;
   onDone: (place: AludelPlace | null, note: string) => void;
 }) {
   const [draft, setDraft] = useState(place);
-  const [noteDraft, setNoteDraft] = useState(note);
+  const [noteDraft, setNoteDraft] = useState(note ?? "");
   const done = () => onDone(draft, noteDraft.trim());
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
@@ -1540,6 +1549,7 @@ function PlaceSheet({
             </div>
           )}
           {/* the pin can be wrong or not enough: the note is where a crew says so */}
+          {note !== undefined && (
           <label className="field">
             <span className="section-label">Note</span>
             <textarea
@@ -1552,6 +1562,7 @@ function PlaceSheet({
               aria-label="Location note"
             />
           </label>
+          )}
         </section>
 
         <div className="dock">
@@ -1559,6 +1570,364 @@ function PlaceSheet({
         </div>
       </div>
 
+      {alert && <Modal title={alert.title} message={alert.message} onClose={() => setAlert(null)} />}
+    </div>
+  );
+}
+
+const ROUTE_COLORS = ["#2f6df6", "#e0533d", "#2ea36b", "#b46cf0", "#e69a1f", "#1fa6b8", "#d7418f", "#5d6b7c"];
+const km = (m: number) => `${(m / 1000).toFixed(1)} km`;
+const hm = (s: number) => {
+  const h = Math.floor(s / 3600);
+  const m = Math.round((s % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+};
+interface RouteGroup {
+  id: string | null;
+  name: string;
+  color: string;
+  sites: SiteRow[];
+}
+
+/**
+ * Every located site on one map, pinned and numbered by list, with a line
+ * through each list in its stored order: the real road polyline when the
+ * list is exactly what the latest plan drew, a straight line otherwise.
+ */
+function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.ReactNode; me: Me; onOpen: (id: string) => void }) {
+  const [lists, setLists] = useState<ListRef[]>([]);
+  const [sites, setSites] = useState<SiteRow[]>([]);
+  const [depot, setDepot] = useState<AludelPlace | null>(null);
+  const [plan, setPlan] = useState<RoutePlan | null>(null);
+  const [error, setError] = useState("");
+  const [sheet, setSheet] = useState(false);
+  const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
+  const host = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const drawn = useRef<(() => void)[]>([]);
+  const admin = team.role === "owner" || team.role === "admin";
+
+  const load = () => {
+    Promise.all([
+      api<ListRef[]>(`/teams/${team.id}/lists`),
+      api<SiteRow[]>(`/teams/${team.id}/sites`),
+      api<{ depot: AludelPlace | null; plan: RoutePlan | null }>(`/teams/${team.id}/plan`),
+    ]).then(([ls, ss, p]) => {
+      setLists(ls);
+      setSites(ss);
+      setDepot(p.depot);
+      setPlan(p.plan);
+    }, (e) => setError(e.message));
+  };
+  useEffect(load, [team.id]);
+
+  const groups = useMemo<RouteGroup[]>(
+    () =>
+      [
+        ...lists.map((l) => ({ id: l.id, name: l.name, color: "", sites: sites.filter((s) => s.listId === l.id) })),
+        { id: null, name: "Unlisted", color: "#8a9098", sites: sites.filter((s) => !s.listId) },
+      ]
+        .filter((g) => g.sites.length)
+        // colours follow the visible order, the same order a plan's routes take
+        .map((g, i) => ({ ...g, color: g.id ? ROUTE_COLORS[i % ROUTE_COLORS.length]! : g.color })),
+    [lists, sites]
+  );
+  /** The plan route this list currently is, stop for stop, or null. */
+  const routeFor = (g: RouteGroup) => {
+    const ids = g.sites.filter((s) => s.place).map((s) => s.id);
+    return (g.id && plan?.routes.find((r) => r.stops.length === ids.length && r.stops.every((s, i) => s.siteId === ids[i]))) || null;
+  };
+
+  useEffect(() => {
+    termDoc(
+      [
+        `map: ${plural(sites.filter((s) => s.place).length, "located site")} of ${sites.length}${depot ? `  ·  depot ${depot.name}` : ""}`,
+        ...groups.flatMap((g) => [``, `  ${g.name}${routeFor(g) ? "  (optimized)" : ""}`, ...g.sites.map((s, i) => `    ${i + 1}. ${s.clientName}${s.place ? "" : "  — no location"}`)]),
+      ].join("\n")
+    );
+  }, [groups, depot, plan]);
+
+  useEffect(() => {
+    const key = me.maps.key;
+    if (!key) return setStatus("failed");
+    let live = true;
+    (async () => {
+      try {
+        await loadMaps(key);
+        const [{ Map }] = await Promise.all([google.maps.importLibrary("maps"), google.maps.importLibrary("marker"), google.maps.importLibrary("geometry")]);
+        if (!live || !host.current) return;
+        mapRef.current = new Map(host.current, { mapId: me.maps.mapId, center: { lat: 20, lng: 0 }, zoom: 1, disableDefaultUI: true, zoomControl: true, gestureHandling: "greedy", clickableIcons: false });
+        setStatus("ready");
+      } catch {
+        if (live) setStatus("failed");
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [me.maps.key, me.maps.mapId]);
+
+  // (re)draw pins and lines whenever the data or the map changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (status !== "ready" || !map) return;
+    drawn.current.forEach((undo) => undo());
+    drawn.current = [];
+    const { AdvancedMarkerElement, PinElement } = google.maps.marker;
+    const bounds = new google.maps.LatLngBounds();
+    let any = false;
+    const pin = (position: google.maps.LatLngLiteral, title: string, background: string, glyph: string) => {
+      const m = new AdvancedMarkerElement({ map, position, title, content: new PinElement({ background, borderColor: "#fff", glyphColor: "#fff", glyph }).element });
+      drawn.current.push(() => (m.map = null));
+      bounds.extend(position);
+      any = true;
+    };
+    for (const g of groups) {
+      const located = g.sites.filter((s) => s.place);
+      located.forEach((s, i) => pin({ lat: s.place!.lat, lng: s.place!.lng }, s.clientName, g.color, String(i + 1)));
+      if (!g.id || located.length < 2) continue;
+      const route = routeFor(g);
+      const path = route?.polyline
+        ? google.maps.geometry.encoding.decodePath(route.polyline).map((p) => ({ lat: p.lat(), lng: p.lng() }))
+        : located.map((s) => ({ lat: s.place!.lat, lng: s.place!.lng }));
+      const line = new google.maps.Polyline({ map, path, strokeColor: g.color, strokeWeight: 4, strokeOpacity: 0.85 });
+      drawn.current.push(() => line.setMap(null));
+    }
+    if (depot) pin({ lat: depot.lat, lng: depot.lng }, depot.name, "#17181a", "⌂");
+    if (any) map.fitBounds(bounds, 40);
+  }, [groups, depot, plan, status]);
+
+  return (
+    <div className="shell">
+      {head}
+      {error && <p className="error">{error}</p>}
+
+      <div className="map-wrap">
+        <div ref={host} className="map big" aria-label="Map of sites" />
+        {status === "failed" && (
+          <span className="map-hint">{me.maps.key ? "Google Maps didn't load" : "Google Maps isn't set up (GOOGLE_MAPS_BROWSER_KEY)"}</span>
+        )}
+        {status === "ready" && !sites.some((s) => s.place) && <span className="map-hint">No site has a location yet</span>}
+      </div>
+
+      {groups.map((g) => {
+        const route = g.id ? routeFor(g) : null;
+        let n = 0;
+        return (
+          <section key={g.id ?? "none"} className="card glass-frosted route-card">
+            <div className="group-head">
+              <span className="swatch" style={{ background: g.color }} aria-hidden="true" />
+              <span className="group-name">{g.name}</span>
+              <span className="group-count">{route ? `${km(route.distanceMeters)} · ${hm(route.durationSeconds)}` : plural(g.sites.length, "site")}</span>
+            </div>
+            {g.sites.map((s) => (
+              <button key={s.id} className="stop-row" onClick={() => onOpen(s.id)}>
+                <span className="stop-n" style={{ background: s.place ? g.color : "#c9cdd3" }}>{s.place ? ++n : "·"}</span>
+                <span className="template-text">
+                  <span className="member-name">{s.clientName}</span>
+                  <span className="template-meta">{s.place?.formattedAddress ?? "No location yet"}</span>
+                </span>
+                <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+              </button>
+            ))}
+          </section>
+        );
+      })}
+
+      {sites.length === 0 && (
+        <div className="empty">
+          <p className="empty-title">Nothing to map</p>
+          <p className="empty-hint">Give your sites a location and they show up here, drawn list by list.</p>
+        </div>
+      )}
+
+      {admin && (
+        <div className="dock">
+          <button className="big-btn primary" onClick={() => setSheet(true)}>Optimize routes</button>
+        </div>
+      )}
+
+      {sheet && (
+        <OptimizeSheet
+          team={team}
+          me={me}
+          lists={lists}
+          depot={depot}
+          onDepot={setDepot}
+          onClose={(changed) => {
+            setSheet(false);
+            if (changed) load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Ask the Route Optimization API for the best N routes over every located
+ * site, then turn the answer into lists. The run itself lives on the server;
+ * this sheet only shapes the ask and shows the plan.
+ */
+function OptimizeSheet({
+  team,
+  me,
+  lists,
+  depot,
+  onDepot,
+  onClose,
+}: {
+  team: TeamRef;
+  me: Me;
+  lists: ListRef[];
+  depot: AludelPlace | null;
+  onDepot: (p: AludelPlace | null) => void;
+  onClose: (changed: boolean) => void;
+}) {
+  const [routes, setRoutes] = useState(Math.min(10, Math.max(1, lists.length || 2)));
+  const [minutes, setMinutes] = useState("30");
+  const [date, setDate] = useState(() => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10));
+  const [from, setFrom] = useState("08:00");
+  const [to, setTo] = useState("17:00");
+  const [busy, setBusy] = useState(false);
+  const [plan, setPlan] = useState<RoutePlan | null>(null);
+  const [depotSheet, setDepotSheet] = useState(false);
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
+  const fail = (title: string) => (e: unknown) => setAlert({ title, message: (e as Error).message });
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      setPlan(
+        await api<RoutePlan>(`/teams/${team.id}/plan`, {
+          method: "POST",
+          body: JSON.stringify({
+            routes,
+            serviceMinutes: Number(minutes) || 0,
+            start: new Date(`${date}T${from}`).toISOString(),
+            end: new Date(`${date}T${to}`).toISOString(),
+          }),
+        })
+      );
+    } catch (e) {
+      fail("Couldn't optimize")(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const apply = () =>
+    api(`/teams/${team.id}/plan/apply`, { method: "POST" }).then(() => onClose(true), fail("Couldn't apply the plan"));
+  const setDepot = (place: AludelPlace | null) =>
+    api(`/teams/${team.id}/depot`, { method: "PUT", body: JSON.stringify({ place }) }).then(() => onDepot(place), fail("Couldn't save the depot"));
+
+  return (
+    <div className="sheet">
+      <div className="shell editor">
+        <header className="editor-top">
+          <button className="icon-btn" onClick={() => onClose(plan !== null)} aria-label="Back"><ChevronLeft /></button>
+          <h1 className="site-title">Optimize</h1>
+        </header>
+
+        <section className="card glass-frosted task">
+          {!me.maps.optimize && (
+            <p className="group-empty">Route optimization isn't set up for this deployment (GOOGLE_CLOUD_PROJECT, GOOGLE_SA_EMAIL, GOOGLE_SA_PRIVATE_KEY).</p>
+          )}
+          <div className="field">
+            <span className="section-label">Routes · {routes}</span>
+            <div className="add-row key-ctl">
+              <button disabled={routes <= 1} onClick={() => setRoutes(routes - 1)} aria-label="One route fewer">− Route</button>
+              <button disabled={routes >= 10} onClick={() => setRoutes(routes + 1)} aria-label="One route more">+ Route</button>
+            </div>
+          </div>
+          <div className="field">
+            <span className="section-label">Depot</span>
+            <button className="row-btn" onClick={() => setDepotSheet(true)} aria-label="Choose depot">
+              <span className="row-btn-text">{depot ? depot.name : <span className="placeholder">Start anywhere</span>}</span>
+              <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+            </button>
+          </div>
+          <label className="field">
+            <span className="section-label">Minutes per stop</span>
+            <input className="text-input left" type="number" inputMode="numeric" min={0} max={240} step={5} value={minutes} onChange={(e) => setMinutes(e.target.value)} aria-label="Minutes per stop" />
+          </label>
+          <label className="field">
+            <span className="section-label">Day</span>
+            <input className="text-input left" type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Day" />
+          </label>
+          <div className="number-row">
+            <label className="field grow">
+              <span className="section-label">From</span>
+              <input className="text-input left" type="time" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
+            </label>
+            <label className="field grow">
+              <span className="section-label">To</span>
+              <input className="text-input left" type="time" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+            </label>
+          </div>
+          {plan && (
+            <button className="big-btn" disabled={busy} onClick={run}>{busy ? "Optimizing…" : "Run again"}</button>
+          )}
+        </section>
+
+        {plan && (
+          <>
+            {plan.routes.map((r, i) => (
+              <section key={r.label} className="card glass-frosted route-card">
+                <div className="group-head">
+                  <span className="swatch" style={{ background: ROUTE_COLORS[i % ROUTE_COLORS.length] }} aria-hidden="true" />
+                  <span className="group-name">{r.label}</span>
+                  <span className="group-count">{r.stops.length ? `${km(r.distanceMeters)} · ${hm(r.durationSeconds)}` : "unused"}</span>
+                </div>
+                {r.stops.map((s, n) => (
+                  <div key={s.siteId} className="stop-row">
+                    <span className="stop-n" style={{ background: ROUTE_COLORS[i % ROUTE_COLORS.length] }}>{n + 1}</span>
+                    <span className="template-text">
+                      <span className="member-name">{s.clientName}</span>
+                      {s.arrival && <span className="template-meta">arrive {new Date(s.arrival).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}
+                    </span>
+                  </div>
+                ))}
+              </section>
+            ))}
+            {plan.skipped.length > 0 && (
+              <section className="card glass-frosted route-card">
+                <p className="section-label">Skipped</p>
+                {plan.skipped.map((s) => (
+                  <div key={s.siteId} className="stop-row">
+                    <span className="stop-n" style={{ background: "#c9cdd3" }}>·</span>
+                    <span className="template-text">
+                      <span className="member-name">{s.clientName}</span>
+                      <span className="template-meta">{s.reason}</span>
+                    </span>
+                  </div>
+                ))}
+              </section>
+            )}
+            <p className="group-empty plan-totals">
+              {plural(plan.metrics.usedVehicleCount, "route")} · {km(plan.metrics.travelDistanceMeters)} · {hm(plan.metrics.totalDurationSeconds)} · cost {Math.round(plan.metrics.totalCost)}
+            </p>
+          </>
+        )}
+
+        <div className="dock">
+          {plan ? (
+            <button className="big-btn primary" onClick={apply}>Apply to lists</button>
+          ) : (
+            <button className="big-btn primary" disabled={busy || !me.maps.optimize} onClick={run}>{busy ? "Optimizing…" : "Optimize"}</button>
+          )}
+        </div>
+      </div>
+
+      {depotSheet && (
+        <PlaceSheet
+          maps={me.maps}
+          place={depot}
+          onDone={(place) => {
+            setDepotSheet(false);
+            if (place?.googlePlaceId !== depot?.googlePlaceId) setDepot(place);
+          }}
+        />
+      )}
       {alert && <Modal title={alert.title} message={alert.message} onClose={() => setAlert(null)} />}
     </div>
   );
