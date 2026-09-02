@@ -1,9 +1,9 @@
 // The single source of truth for what a template can be. A task is a name and
-// an ordered list of blocks; buttons are just another block kind, placed
-// wherever the author wants them. `normalizeTemplate` is the server-side gate
+// an ordered list of blocks; a buttons group is just another block kind, placed
+// wherever the author wants it. `normalizeTemplate` is the server-side gate
 // that clamps any untrusted document into that shape or rejects it.
 
-export type BlockKind = "photo" | "text" | "number" | "button";
+export type BlockKind = "photo" | "text" | "number" | "buttons";
 
 export type Role = "owner" | "admin" | "member";
 
@@ -15,6 +15,7 @@ export interface Block {
   kind: BlockKind;
   label: string;
   unit: string; // meaningful for "number" only; kept empty otherwise
+  options: string[]; // the keys of a "buttons" block, 1–6 of them; empty otherwise
 }
 
 export interface Task {
@@ -32,18 +33,31 @@ export const LIMITS = {
   name: 80,
   label: 60,
   unit: 12,
+  key: 24,
+  options: 6,
   tasks: 30,
   blocks: 20,
   body: 128 * 1024,
 } as const;
 
-const BLOCK_KINDS: readonly BlockKind[] = ["photo", "text", "number", "button"];
+const BLOCK_KINDS: readonly BlockKind[] = ["photo", "text", "number", "buttons"];
 
-const DEFAULT_LABEL: Record<BlockKind, string> = {
+export const DEFAULT_LABEL: Record<BlockKind, string> = {
   photo: "Photo",
   text: "Text",
   number: "Number",
-  button: "DONE",
+  buttons: "Outcome",
+};
+
+/** A fresh buttons block: two named keys, the smallest useful choice. */
+export const DEFAULT_OPTIONS: readonly string[] = ["PASS", "FAIL"];
+
+/** 1–6 non-empty keys; an empty or missing list gets the defaults. */
+const optionsOf = (v: unknown): string[] => {
+  const keys = arr(v, LIMITS.options)
+    .map((k) => str(k, LIMITS.key, ""))
+    .filter(Boolean);
+  return keys.length ? keys : [...DEFAULT_OPTIONS];
 };
 
 const str = (v: unknown, max: number, fallback: string): string =>
@@ -60,32 +74,39 @@ const arr = (v: unknown, max: number): unknown[] =>
 
 function normalizeTask(input: unknown): Task {
   const t = rec(input);
-  const blocks = arr(t.blocks, LIMITS.blocks)
-    .map(rec)
-    .filter((b) => BLOCK_KINDS.includes(b.kind as BlockKind))
-    .map((b): Block => {
-      const kind = b.kind as BlockKind;
-      return {
-        id: id(b.id),
-        kind,
-        label: str(b.label, LIMITS.label, DEFAULT_LABEL[kind]),
-        unit: kind === "number" ? str(b.unit, LIMITS.unit, "").trim() : "",
-      };
-    });
-  // `outcomes` (and its older name `endsWith`) was a task-bound button list;
-  // stored documents keep their buttons by landing them at the end of blocks.
-  const legacy = arr(t.outcomes ?? t.endsWith, LIMITS.blocks)
-    .map(rec)
-    .map((b): Block => ({
+  const blocks: Block[] = [];
+  // Older documents stored one block per button (`kind: "button"`), and older
+  // still a task-bound `outcomes` / `endsWith` list. Each such button becomes a
+  // key of a buttons block, and a run of them folds into one block.
+  let folding: Block | null = null;
+  const legacyKey = (b: Record<string, unknown>) => {
+    const key = str(b.label, LIMITS.key, "DONE");
+    if (folding && folding.options.length < LIMITS.options) return folding.options.push(key);
+    folding = { id: id(b.id), kind: "buttons", label: DEFAULT_LABEL.buttons, unit: "", options: [key] };
+    blocks.push(folding);
+  };
+  for (const b of arr(t.blocks, LIMITS.blocks).map(rec)) {
+    if (b.kind === "button") {
+      legacyKey(b);
+      continue;
+    }
+    folding = null;
+    if (!BLOCK_KINDS.includes(b.kind as BlockKind)) continue;
+    const kind = b.kind as BlockKind;
+    blocks.push({
       id: id(b.id),
-      kind: "button",
-      label: str(b.label, LIMITS.label, DEFAULT_LABEL.button),
-      unit: "",
-    }));
+      kind,
+      label: str(b.label, LIMITS.label, DEFAULT_LABEL[kind]),
+      unit: kind === "number" ? str(b.unit, LIMITS.unit, "").trim() : "",
+      options: kind === "buttons" ? optionsOf(b.options) : [],
+    });
+  }
+  folding = null;
+  for (const b of arr(t.outcomes ?? t.endsWith, LIMITS.options).map(rec)) legacyKey(b);
   return {
     id: id(t.id),
     name: str(t.name, LIMITS.name, "Untitled task"),
-    blocks: [...blocks, ...legacy].slice(0, LIMITS.blocks),
+    blocks: blocks.slice(0, LIMITS.blocks),
   };
 }
 

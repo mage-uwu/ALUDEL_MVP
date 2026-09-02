@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Logo } from "./logo";
 import { Check, ChevronLeft, ChevronRight, Grip, More, Pencil, Plus, X } from "./icons";
 import {
+  DEFAULT_LABEL,
+  DEFAULT_OPTIONS,
   EMAIL_RE,
+  LIMITS,
+  normalizeTemplate,
   type AludelPlace,
   type Block,
   type BlockKind,
@@ -155,8 +159,8 @@ const dumpTemplate = (t: Loaded): string =>
       ``,
       `  task "${k.name}"`,
       ...k.blocks.map((b) =>
-        b.kind === "button"
-          ? `    button [${b.label.toUpperCase() || "?"}]`
+        b.kind === "buttons"
+          ? `    buttons "${b.label}"  ${b.options.map((o) => `[${o.toUpperCase()}]`).join(" ")}`
           : `    ${b.kind.padEnd(6)} "${b.label}"${b.unit ? `  (${b.unit})` : ""}`
       ),
     ]),
@@ -640,12 +644,13 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
 
   const save = async () => {
     try {
-      const body = { name: tpl.name, tasks: tpl.tasks };
+      // the same gate the server applies, so what is shown after a save is what was stored
+      const body = normalizeTemplate({ name: tpl.name, tasks: tpl.tasks })!;
       const { version } = await api<{ version: number }>(`/teams/${teamId}/templates/${id}`, {
         method: "PUT",
         body: JSON.stringify({ ...body, version: tpl.version }),
       });
-      setTpl({ ...tpl, version });
+      setTpl({ ...tpl, ...body, version });
       setSaved(JSON.stringify(body));
       setError("");
     } catch (e) {
@@ -756,8 +761,9 @@ function TaskCard({
         {
           id: uid(),
           kind,
-          label: { photo: "Photo", text: "Text", number: "Number", button: "DONE" }[kind],
+          label: DEFAULT_LABEL[kind],
           unit: "",
+          options: kind === "buttons" ? [...DEFAULT_OPTIONS] : [],
         },
       ],
     }));
@@ -791,7 +797,7 @@ function TaskCard({
         <button onClick={() => addBlock("photo")}>+ Photo</button>
         <button onClick={() => addBlock("text")}>+ Text</button>
         <button onClick={() => addBlock("number")}>+ Number</button>
-        <button onClick={() => addBlock("button")}>+ Button</button>
+        <button onClick={() => addBlock("buttons")}>+ Buttons</button>
       </div>
     </section>
   );
@@ -810,21 +816,7 @@ function BlockRow({
   onHandleDown: (e: React.PointerEvent) => void;
   onRemove: () => void;
 }) {
-  if (block.kind === "button") {
-    return (
-      <div className={`block button-block${dragging ? " dragging" : ""}`}>
-        <input
-          className="button-key"
-          value={block.label}
-          maxLength={60}
-          onChange={(e) => onChange({ ...block, label: e.target.value })}
-          aria-label="Button label"
-        />
-        <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
-      </div>
-    );
-  }
-
+  const setOptions = (options: string[]) => onChange({ ...block, options });
   return (
     <div className={`block${dragging ? " dragging" : ""}`}>
       <div className="block-head">
@@ -853,6 +845,40 @@ function BlockRow({
             aria-label="Unit"
           />
         </div>
+      )}
+      {block.kind === "buttons" && (
+        <>
+          {/* the keys wrap into an adaptive grid: the last key fills its row */}
+          <div className="key-grid">
+            {block.options.map((key, i) => (
+              <input
+                key={i}
+                className="button-key"
+                value={key}
+                maxLength={LIMITS.key}
+                placeholder="LABEL"
+                onChange={(e) => setOptions(block.options.map((k, j) => (j === i ? e.target.value : k)))}
+                aria-label={`Button ${i + 1} label`}
+              />
+            ))}
+          </div>
+          <div className="add-row key-ctl">
+            <button
+              disabled={block.options.length <= 1}
+              onClick={() => setOptions(block.options.slice(0, -1))}
+              aria-label="Remove last button"
+            >
+              − Button
+            </button>
+            <button
+              disabled={block.options.length >= LIMITS.options}
+              onClick={() => setOptions([...block.options, ""])}
+              aria-label="Add button"
+            >
+              + Button
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

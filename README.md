@@ -2,8 +2,9 @@
 
 Dirt-simple form template builder on Cloudflare Workers + D1.
 
-**Templates**: Templates → Tasks (molecules) → Blocks (atoms: Photo, Text, Number, Button).
-A task is just a name and an ordered list of blocks; buttons are placed like any other block —
+**Templates**: Templates → Tasks (molecules) → Blocks (atoms: Photo, Text, Number, Buttons).
+A task is just a name and an ordered list of blocks; a Buttons block is a prompt with one to six
+named keys (two by default) and is placed like any other block —
 invalid states are unrepresentable, and the server re-validates every document through the same
 `src/shared/model.ts` gate before it touches the database. A save names the version it was
 edited from, so two people on the same template get a 409 instead of silently overwriting each other.

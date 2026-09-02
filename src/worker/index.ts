@@ -1,5 +1,13 @@
 /// <reference types="@cloudflare/workers-types" />
-import { EMAIL_RE, LIMITS, normalizePlace, normalizeTemplate, type AludelPlace, type Role } from "../shared/model";
+import {
+  DEFAULT_OPTIONS,
+  EMAIL_RE,
+  LIMITS,
+  normalizePlace,
+  normalizeTemplate,
+  type AludelPlace,
+  type Role,
+} from "../shared/model";
 import {
   currentUser,
   finishLogin,
@@ -102,8 +110,8 @@ const starterDoc = () => ({
       id: crypto.randomUUID(),
       name: "First task",
       blocks: [
-        { id: crypto.randomUUID(), kind: "photo", label: "Photo", unit: "" },
-        { id: crypto.randomUUID(), kind: "button", label: "DONE", unit: "" },
+        { id: crypto.randomUUID(), kind: "photo", label: "Photo", unit: "", options: [] },
+        { id: crypto.randomUUID(), kind: "buttons", label: "Outcome", unit: "", options: [...DEFAULT_OPTIONS] },
       ],
     },
   ],

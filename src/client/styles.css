@@ -724,11 +724,11 @@ body {
   outline: none;
 }
 
-/* button blocks: gloss ceramic keys, label edited on the face */
-.button-block { flex-direction: row; align-items: center; gap: 6px; }
+/* buttons blocks: gloss ceramic keys, each label edited on its face. Keys
+   wrap at 130px so two sit side by side on a phone and a lone key spans. */
+.key-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .button-key {
-  flex: 1 1 0;
-  width: 0;
+  flex: 1 1 130px;
   min-width: 0;
   min-height: 64px;
   border: 1px solid var(--ceramic-border);
@@ -762,6 +762,9 @@ body {
   cursor: pointer;
 }
 .add-row button:active { background: rgba(255, 255, 255, 0.6); }
+.add-row button:disabled { opacity: 0.35; cursor: default; }
+/* the key-count controls belong to one block, so they sit a size below the task's add row */
+.add-row.key-ctl button { min-height: 40px; font-size: 13px; }
 
 /* drag-to-reorder */
 .task-list { display: flex; flex-direction: column; gap: 14px; }
