@@ -1587,6 +1587,10 @@ interface RouteGroup {
   name: string;
   color: string;
   sites: SiteRow[];
+  /** Each located site's number within the list, kept stable under filtering. */
+  numbers: Record<string, number>;
+  /** How many sites the list holds in all; a group shown short of this draws no line. */
+  total: number;
 }
 
 /**
@@ -1601,6 +1605,7 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
   const [plan, setPlan] = useState<RoutePlan | null>(null);
   const [error, setError] = useState("");
   const [sheet, setSheet] = useState(false);
+  const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -1629,9 +1634,21 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
       ]
         .filter((g) => g.sites.length)
         // colours follow the visible order, the same order a plan's routes take
-        .map((g, i) => ({ ...g, color: g.id ? ROUTE_COLORS[i % ROUTE_COLORS.length]! : g.color })),
+        .map((g, i) => ({
+          ...g,
+          color: g.id ? ROUTE_COLORS[i % ROUTE_COLORS.length]! : g.color,
+          numbers: Object.fromEntries(g.sites.filter((s) => s.place).map((s, n) => [s.id, n + 1])),
+          total: g.sites.length,
+        })),
     [lists, sites]
   );
+  // the filter: comma-separated terms, each matching a list by name (the whole list)
+  // or a site by client name; no terms means everything
+  const terms = query.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const hit = (name: string) => terms.some((t) => name.toLowerCase().includes(t));
+  const shown = terms.length
+    ? groups.map((g) => (hit(g.name) ? g : { ...g, sites: g.sites.filter((s) => hit(s.clientName)) })).filter((g) => g.sites.length)
+    : groups;
   /** The plan route this list currently is, stop for stop, or null. */
   const routeFor = (g: RouteGroup) => {
     const ids = g.sites.filter((s) => s.place).map((s) => s.id);
@@ -1682,10 +1699,11 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
       bounds.extend(position);
       any = true;
     };
-    for (const g of groups) {
+    for (const g of shown) {
       const located = g.sites.filter((s) => s.place);
-      located.forEach((s, i) => pin({ lat: s.place!.lat, lng: s.place!.lng }, s.clientName, g.color, String(i + 1)));
-      if (!g.id || located.length < 2) continue;
+      located.forEach((s) => pin({ lat: s.place!.lat, lng: s.place!.lng }, s.clientName, g.color, String(g.numbers[s.id])));
+      // a line is the list's route: only drawn when the whole list is on screen
+      if (!g.id || located.length < 2 || g.sites.length < g.total) continue;
       const route = routeFor(g);
       const path = route?.polyline
         ? google.maps.geometry.encoding.decodePath(route.polyline).map((p) => ({ lat: p.lat(), lng: p.lng() }))
@@ -1695,12 +1713,26 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
     }
     if (depot) pin({ lat: depot.lat, lng: depot.lng }, depot.name, "#17181a", "⌂");
     if (any) map.fitBounds(bounds, 40);
-  }, [groups, depot, plan, status]);
+  }, [groups, query, depot, plan, status]);
 
   return (
     <div className="shell">
       {head}
       {error && <p className="error">{error}</p>}
+
+      <div className="filter">
+        <input
+          className="text-input left filter-input"
+          type="search"
+          value={query}
+          placeholder="Filter by site or list…"
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Filter sites and lists"
+        />
+        {query && (
+          <button className="icon-btn filter-clear" aria-label="Clear filter" onClick={() => setQuery("")}><X /></button>
+        )}
+      </div>
 
       <div className="map-wrap">
         <div ref={host} className="map big" aria-label="Map of sites" />
@@ -1708,21 +1740,23 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
           <span className="map-hint">{me.maps.key ? "Google Maps didn't load" : "Google Maps isn't set up (GOOGLE_MAPS_BROWSER_KEY)"}</span>
         )}
         {status === "ready" && !sites.some((s) => s.place) && <span className="map-hint">No site has a location yet</span>}
+        {status === "ready" && terms.length > 0 && !shown.some((g) => g.sites.some((s) => s.place)) && <span className="map-hint">Nothing matches</span>}
       </div>
 
-      {groups.map((g) => {
-        const route = g.id ? routeFor(g) : null;
-        let n = 0;
+      {shown.map((g) => {
+        const route = g.id && g.sites.length === g.total ? routeFor(g) : null;
         return (
           <section key={g.id ?? "none"} className="card glass-frosted route-card">
             <div className="group-head">
               <span className="swatch" style={{ background: g.color }} aria-hidden="true" />
               <span className="group-name">{g.name}</span>
-              <span className="group-count">{route ? `${km(route.distanceMeters)} · ${hm(route.durationSeconds)}` : plural(g.sites.length, "site")}</span>
+              <span className="group-count">
+                {route ? `${km(route.distanceMeters)} · ${hm(route.durationSeconds)}` : g.sites.length < g.total ? `${g.sites.length} of ${g.total}` : plural(g.sites.length, "site")}
+              </span>
             </div>
             {g.sites.map((s) => (
               <button key={s.id} className="stop-row" onClick={() => onOpen(s.id)}>
-                <span className="stop-n" style={{ background: s.place ? g.color : "#c9cdd3" }}>{s.place ? ++n : "·"}</span>
+                <span className="stop-n" style={{ background: s.place ? g.color : "#c9cdd3" }}>{s.place ? g.numbers[s.id] : "·"}</span>
                 <span className="template-text">
                   <span className="member-name">{s.clientName}</span>
                   <span className="template-meta">{s.place?.formattedAddress ?? "No location yet"}</span>
@@ -1733,6 +1767,13 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
           </section>
         );
       })}
+
+      {sites.length > 0 && shown.length === 0 && (
+        <div className="empty">
+          <p className="empty-title">Nothing matches</p>
+          <p className="empty-hint">Try part of a site's name or a list's name. Commas separate several.</p>
+        </div>
+      )}
 
       {sites.length === 0 && (
         <div className="empty">
