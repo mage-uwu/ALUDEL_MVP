@@ -12,8 +12,32 @@ const COST_PER_KM = 1;
 /** Skipping a stop must cost far more than driving to it, so only real infeasibility skips one. */
 const SKIP_PENALTY = 10_000;
 
-export const configured = (env: Env) =>
-  !!(env.GOOGLE_CLOUD_PROJECT && env.GOOGLE_SA_EMAIL && env.GOOGLE_SA_PRIVATE_KEY);
+interface Credentials {
+  project: string;
+  email: string;
+  privateKey: string;
+}
+
+/**
+ * The service account, from either the whole key file pasted into one secret
+ * (GOOGLE_SERVICE_ACCOUNT) or its three fields as separate secrets. Null when
+ * neither is complete.
+ */
+export function credentials(env: Env): Credentials | null {
+  if (env.GOOGLE_SERVICE_ACCOUNT) {
+    try {
+      const j = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT) as Record<string, unknown>;
+      if (typeof j.project_id === "string" && typeof j.client_email === "string" && typeof j.private_key === "string")
+        return { project: j.project_id, email: j.client_email, privateKey: j.private_key };
+    } catch {
+      /* not JSON: fall through to the three-secret form */
+    }
+  }
+  return env.GOOGLE_CLOUD_PROJECT && env.GOOGLE_SA_EMAIL && env.GOOGLE_SA_PRIVATE_KEY
+    ? { project: env.GOOGLE_CLOUD_PROJECT, email: env.GOOGLE_SA_EMAIL, privateKey: env.GOOGLE_SA_PRIVATE_KEY }
+    : null;
+}
+export const configured = (env: Env) => credentials(env) !== null;
 
 const b64url = (bytes: ArrayBuffer | Uint8Array) => {
   let bin = "";
@@ -25,12 +49,12 @@ const utf8 = (s: string) => new TextEncoder().encode(s);
 // ——— server-side OAuth: a service-account JWT exchanged for a short-lived token ———
 let cached: { token: string; exp: number } | null = null;
 
-async function accessToken(env: Env): Promise<string> {
+async function accessToken(env: Env, sa: Credentials): Promise<string> {
   if (cached && cached.exp > Date.now() + 60_000) return cached.token;
   const iat = Math.floor(Date.now() / 1000);
   const part = (o: unknown) => b64url(utf8(JSON.stringify(o)));
   const unsigned = `${part({ alg: "RS256", typ: "JWT" })}.${part({
-    iss: env.GOOGLE_SA_EMAIL,
+    iss: sa.email,
     scope: SCOPE,
     aud: TOKEN_URL,
     iat,
@@ -38,7 +62,7 @@ async function accessToken(env: Env): Promise<string> {
   })}`;
   // the key arrives as PEM, with real newlines or the literal \n of a one-line secret field:
   // drop the armour and anything that is not base64
-  const der = env.GOOGLE_SA_PRIVATE_KEY!.replace(/-----[^-]+-----/g, "").replace(/[^A-Za-z0-9+/=]/g, "");
+  const der = sa.privateKey.replace(/-----[^-]+-----/g, "").replace(/[^A-Za-z0-9+/=]/g, "");
   const key = await crypto.subtle.importKey(
     "pkcs8",
     Uint8Array.from(atob(der), (c) => c.charCodeAt(0)),
@@ -193,12 +217,14 @@ export async function optimize(env: Env, teamId: string, ask: Omit<OptimizeInput
   if (!stops.length) throw new Error("No site has a location yet");
   const input: OptimizeInput = { ...ask, depot: parsePlace(team?.depot), stops };
 
+  const sa = credentials(env);
+  if (!sa) throw new Error("Route optimization is not set up for this deployment");
   const url = env.OPTIMIZE_ENDPOINT
     ? `${env.OPTIMIZE_ENDPOINT}/optimize`
-    : `https://routeoptimization.googleapis.com/v1/projects/${encodeURIComponent(env.GOOGLE_CLOUD_PROJECT!)}:optimizeTours`;
+    : `https://routeoptimization.googleapis.com/v1/projects/${encodeURIComponent(sa.project)}:optimizeTours`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { authorization: `Bearer ${await accessToken(env)}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${await accessToken(env, sa)}`, "content-type": "application/json" },
     body: JSON.stringify(buildRequest(input)),
   });
   if (!res.ok) {

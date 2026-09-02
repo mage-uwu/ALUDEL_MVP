@@ -36,15 +36,16 @@ cached per isolate). In the same Cloud project:
 1. Enable **Route Optimization API**.
 2. IAM → Service accounts → create one, grant it the **Route Optimization Editor** role, and
    create a JSON key.
-3. Give the Worker three secrets from that key file:
+3. Give the Worker the whole key file as one secret:
 
 ```sh
-wrangler secret put GOOGLE_CLOUD_PROJECT     # project_id
-wrangler secret put GOOGLE_SA_EMAIL          # client_email
-wrangler secret put GOOGLE_SA_PRIVATE_KEY    # private_key (the PEM; literal \n is fine)
+wrangler secret put GOOGLE_SERVICE_ACCOUNT < aludel-optimizer-key.json
 ```
 
-Until all three are set the Optimize sheet says so. Each run is one `optimizeTours` call
+(In the dashboard: paste the file's entire contents as the value.) The three fields it needs are
+`project_id`, `client_email` and `private_key`; they may instead be set as three secrets,
+`GOOGLE_CLOUD_PROJECT`, `GOOGLE_SA_EMAIL` and `GOOGLE_SA_PRIVATE_KEY`. Until one form is complete
+the Optimize sheet says so. Each run is one `optimizeTours` call
 (30 s solver budget, 120 s above 40 stops, live traffic when the window starts within a day).
 
 ## Auth and tenancy

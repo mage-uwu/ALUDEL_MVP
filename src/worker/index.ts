@@ -36,7 +36,9 @@ export interface Env {
   GOOGLE_MAPS_BROWSER_KEY?: string;
   /** Map ID (Cloud-based map style); advanced markers need one. Defaults to Google's demo id. */
   GOOGLE_MAPS_MAP_ID?: string;
-  /** Route Optimization API: the Cloud project and a service account that may call it (secrets). */
+  /** Route Optimization API: the service-account key file as one secret… */
+  GOOGLE_SERVICE_ACCOUNT?: string;
+  /** …or its project_id / client_email / private_key as three. */
   GOOGLE_CLOUD_PROJECT?: string;
   GOOGLE_SA_EMAIL?: string;
   GOOGLE_SA_PRIVATE_KEY?: string;

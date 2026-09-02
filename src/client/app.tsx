@@ -1830,7 +1830,7 @@ function OptimizeSheet({
 
         <section className="card glass-frosted task">
           {!me.maps.optimize && (
-            <p className="group-empty">Route optimization isn't set up for this deployment (GOOGLE_CLOUD_PROJECT, GOOGLE_SA_EMAIL, GOOGLE_SA_PRIVATE_KEY).</p>
+            <p className="group-empty">Route optimization isn't set up for this deployment (GOOGLE_SERVICE_ACCOUNT).</p>
           )}
           <div className="field">
             <span className="section-label">Routes · {routes}</span>
