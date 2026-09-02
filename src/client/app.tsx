@@ -2031,6 +2031,8 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
   const [error, setError] = useState("");
   const [sheet, setSheet] = useState(false);
   const [query, setQuery] = useState("");
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -2074,6 +2076,21 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
   const shown = terms.length
     ? groups.map((g) => (hit(g.name) ? g : { ...g, sites: g.sites.filter((s) => hit(s.clientName)) })).filter((g) => g.sites.length)
     : groups;
+  const commitRename = async () => {
+    if (!renaming) return;
+    const name = renaming.name.trim();
+    if (!name) return setRenaming(null);
+    if (lists.some((l) => l.id !== renaming.id && l.name.toLowerCase() === name.toLowerCase())) return setError(`There is already a list called “${name}”.`);
+    try {
+      await api(`/teams/${team.id}/lists/${renaming.id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+      setLists((ls) => ls.map((l) => (l.id === renaming.id ? { ...l, name } : l)));
+      setError("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+    setRenaming(null);
+  };
+
   /** The plan route this list currently is, stop for stop, or null. */
   const routeFor = (g: RouteGroup) => {
     const ids = g.sites.filter((s) => s.place).map((s) => s.id);
@@ -2163,13 +2180,34 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
         const route = g.id && g.sites.length === g.total ? routeFor(g) : null;
         return (
           <section key={g.id ?? "none"} className="card glass-frosted route-card">
-            <div className="group-head">
-              <span className="swatch" style={{ background: g.color }} aria-hidden="true" />
-              <span className="group-name">{g.name}</span>
-              <span className="group-count">
-                {route ? `${km(route.distanceMeters)} · ${hm(route.durationSeconds)}` : g.sites.length < g.total ? `${g.sites.length} of ${g.total}` : plural(g.sites.length, "site")}
-              </span>
-            </div>
+            {renaming && renaming.id === g.id ? (
+              <EditRow value={renaming.name} label={`Rename ${g.name}`} onChange={(name) => setRenaming({ id: g.id!, name })} onCommit={commitRename} onCancel={() => setRenaming(null)} />
+            ) : (
+              <div className="group-head">
+                <span className="swatch" style={{ background: g.color }} aria-hidden="true" />
+                <span className="group-name">{g.name}</span>
+                <span className="group-count">
+                  {route ? `${km(route.distanceMeters)} · ${hm(route.durationSeconds)}` : g.sites.length < g.total ? `${g.sites.length} of ${g.total}` : plural(g.sites.length, "site")}
+                </span>
+                {g.id && (
+                  <div className="menu-wrap">
+                    <button className="icon-btn" aria-label={`Options for ${g.name}`} aria-expanded={menuFor === g.id} onClick={() => setMenuFor(menuFor === g.id ? null : g.id)}>
+                      <More />
+                    </button>
+                    {menuFor === g.id && (
+                      <>
+                        <div className="menu-scrim" onClick={() => setMenuFor(null)} />
+                        <div className="menu" role="menu">
+                          <button className="menu-item" role="menuitem" onClick={() => { setMenuFor(null); setRenaming({ id: g.id!, name: g.name }); }}>
+                            Rename
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {g.sites.map((s) => (
               <button key={s.id} className="stop-row" onClick={() => onOpen(s.id)}>
                 <span className="stop-n" style={{ background: s.place ? g.color : "#c9cdd3" }}>{s.place ? g.numbers[s.id] : "·"}</span>

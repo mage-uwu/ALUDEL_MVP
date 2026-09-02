@@ -1087,3 +1087,7 @@ button.stop-row:active { background: rgba(255, 255, 255, 0.55); }
 .report-value { margin: 0; padding: 12px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.55); font-size: 16px; font-weight: 700; white-space: pre-wrap; display: flex; align-items: center; gap: 10px; }
 
 .invite-row .text-input { margin-top: 0; min-height: 48px; flex: 1; min-width: 0; font-size: 15px; }
+
+.route-card .group-head .menu-wrap { margin-left: 2px; }
+.route-card .group-head .icon-btn { width: 32px; height: 32px; }
+.route-card .dispatch-row { padding: 0 2px 6px 6px; }
