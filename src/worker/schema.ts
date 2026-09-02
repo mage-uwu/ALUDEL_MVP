@@ -67,6 +67,7 @@ const TABLES = [
      client_name TEXT NOT NULL,
      address TEXT NOT NULL DEFAULT '',
      place TEXT,
+     location_note TEXT NOT NULL DEFAULT '',
      emails TEXT NOT NULL DEFAULT '[]',
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
@@ -120,6 +121,7 @@ export function ensureSchema(db: D1Database): Promise<unknown> {
     await addColumn("ALTER TABLE sites ADD COLUMN emails TEXT NOT NULL DEFAULT '[]'");
     // sites created before locations were real places (address is now derived from place)
     await addColumn("ALTER TABLE sites ADD COLUMN place TEXT");
+    await addColumn("ALTER TABLE sites ADD COLUMN location_note TEXT NOT NULL DEFAULT ''");
     await db.batch(INDEXES.map((sql) => db.prepare(sql)));
   })()).catch((e) => {
     ready = null;

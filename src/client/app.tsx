@@ -81,6 +81,8 @@ interface SiteDoc {
   /** Derived by the server from place.formattedAddress; empty when there is no place. */
   address: string;
   place: AludelPlace | null;
+  /** Where the pin falls short: a gate code, a back unit, "one door north of the marker". */
+  locationNote: string;
   emails: string[];
   listId: string | null;
   dispatches: Dispatch[];
@@ -1161,7 +1163,13 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
   const [wizard, setWizard] = useState(false);
   const [listSheet, setListSheet] = useState(false);
   const [placeSheet, setPlaceSheet] = useState(false);
-  const fields = (x: SiteDoc) => ({ clientName: x.clientName, place: x.place, emails: x.emails, listId: x.listId });
+  const fields = (x: SiteDoc) => ({
+    clientName: x.clientName,
+    place: x.place,
+    locationNote: x.locationNote,
+    emails: x.emails,
+    listId: x.listId,
+  });
   const dirty = useMemo(() => !!site && JSON.stringify(fields(site)) !== saved, [site, saved]);
 
   const load = () =>
@@ -1183,6 +1191,7 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
       [
         `site "${site.clientName}"`,
         `  ${site.place ? `${site.place.formattedAddress}  (${site.place.lat.toFixed(5)}, ${site.place.lng.toFixed(5)})` : "—"}`,
+        ...(site.locationNote ? [`  note: ${site.locationNote}`] : []),
         `  ${site.emails.join(", ") || "—"}  ·  ${listName}`,
         ``,
         ...(site.dispatches.length
@@ -1277,7 +1286,11 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
         </label>
         <div className="field">
           <span className="section-label">Location</span>
-          <button className={`row-btn${site.place ? " tall" : ""}`} onClick={() => setPlaceSheet(true)} aria-label="Choose location">
+          <button
+            className={`row-btn${site.place || site.locationNote ? " tall" : ""}`}
+            onClick={() => setPlaceSheet(true)}
+            aria-label="Choose location"
+          >
             <span className="row-btn-text">
               {site.place ? (
                 <>
@@ -1287,10 +1300,10 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
               ) : (
                 <span className="placeholder">Find it on the map</span>
               )}
+              {site.locationNote && <span className="place-note">{site.locationNote}</span>}
             </span>
             <span className="chevron" aria-hidden="true"><ChevronRight /></span>
           </button>
-          {site.place && <p className="attribution">Place data by Google</p>}
         </div>
         <div className="field">
           <span className="section-label">Emails</span>
@@ -1380,8 +1393,9 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
         <PlaceSheet
           maps={maps}
           place={site.place}
-          onDone={(place) => {
-            patch({ place, address: place?.formattedAddress ?? "" });
+          note={site.locationNote}
+          onDone={(place, locationNote) => {
+            patch({ place, locationNote, address: place?.formattedAddress ?? "" });
             setPlaceSheet(false);
           }}
         />
@@ -1400,13 +1414,17 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
 function PlaceSheet({
   maps,
   place,
+  note,
   onDone,
 }: {
   maps: MapsConfig;
   place: AludelPlace | null;
-  onDone: (place: AludelPlace | null) => void;
+  note: string;
+  onDone: (place: AludelPlace | null, note: string) => void;
 }) {
   const [draft, setDraft] = useState(place);
+  const [noteDraft, setNoteDraft] = useState(note);
+  const done = () => onDone(draft, noteDraft.trim());
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
   const pickerHost = useRef<HTMLDivElement>(null);
@@ -1489,7 +1507,7 @@ function PlaceSheet({
     <div className="sheet">
       <div className="shell editor">
         <header className="editor-top">
-          <button className="icon-btn" onClick={() => onDone(draft)} aria-label="Back"><ChevronLeft /></button>
+          <button className="icon-btn" onClick={done} aria-label="Back"><ChevronLeft /></button>
           <h1 className="site-title">Location</h1>
           {draft && (
             <button className="icon-btn danger" aria-label="Clear location" onClick={() => setDraft(null)}><X /></button>
@@ -1521,11 +1539,23 @@ function PlaceSheet({
               </span>
             </div>
           )}
-          <p className="attribution">Place data by Google</p>
+          {/* the pin can be wrong or not enough: the note is where a crew says so */}
+          <label className="field">
+            <span className="section-label">Note</span>
+            <textarea
+              className="text-input left note"
+              rows={2}
+              value={noteDraft}
+              maxLength={240}
+              placeholder="Gate code, back unit, pin is one door north…"
+              onChange={(e) => setNoteDraft(e.target.value)}
+              aria-label="Location note"
+            />
+          </label>
         </section>
 
         <div className="dock">
-          <button className="big-btn primary" onClick={() => onDone(draft)}>Done</button>
+          <button className="big-btn primary" onClick={done}>Done</button>
         </div>
       </div>
 

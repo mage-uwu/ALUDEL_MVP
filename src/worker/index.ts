@@ -281,8 +281,8 @@ async function teamRoutes(
       if (place === undefined) return error(422, "Invalid place");
       const id = crypto.randomUUID();
       await env.DB.prepare(
-        `INSERT INTO sites (id, team_id, list_id, client_name, address, place, emails, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sites (id, team_id, list_id, client_name, address, place, location_note, emails, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           id,
@@ -291,6 +291,7 @@ async function teamRoutes(
           clientName,
           place?.formattedAddress ?? "",
           place ? JSON.stringify(place) : null,
+          field(body?.locationNote, 240),
           JSON.stringify(emailsOf(body?.emails)),
           nowIso(),
           nowIso()
@@ -315,7 +316,8 @@ async function teamRoutes(
 
     if (!onDispatches && req.method === "GET") {
       const row = await env.DB.prepare(
-        `SELECT id, client_name AS clientName, address, place, emails, list_id AS listId
+        `SELECT id, client_name AS clientName, address, place, location_note AS locationNote, emails,
+                list_id AS listId
          FROM sites WHERE id = ?`
       )
         .bind(siteId)
@@ -342,13 +344,15 @@ async function teamRoutes(
       const place = placeOf(body.place);
       if (place === undefined) return error(422, "Invalid place");
       await env.DB.prepare(
-        `UPDATE sites SET client_name = ?, address = ?, place = ?, emails = ?, list_id = ?, updated_at = ?
+        `UPDATE sites SET client_name = ?, address = ?, place = ?, location_note = ?, emails = ?, list_id = ?,
+                          updated_at = ?
          WHERE id = ?`
       )
         .bind(
           clientName,
           place?.formattedAddress ?? "",
           place ? JSON.stringify(place) : null,
+          field(body.locationNote, 240),
           JSON.stringify(emailsOf(body.emails)),
           listId,
           nowIso(),
