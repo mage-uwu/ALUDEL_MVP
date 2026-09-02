@@ -716,7 +716,7 @@ function HomeHeader({
   const [menu, setMenu] = useState(false);
   return (
     <header className="home-head">
-      <Logo size={30} className="home-mark" />
+      <span className="mark small" aria-hidden="true"><Logo size={22} /></span>
       <div className="home-title">
         <h1>{SECTIONS.find((s) => s.key === section)?.title}</h1>
         <span className="team-name">{team.name}</span>
