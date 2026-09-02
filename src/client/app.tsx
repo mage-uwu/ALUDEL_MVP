@@ -170,6 +170,13 @@ const FACE = { idle: "(≧◡≦)", blink: "(^◡^)", wink: "(≧◡^)" };
 const Face = ({ of, hidden }: { of: string; hidden: boolean }) => (
   <span className={`face${hidden ? " out" : ""}`}>{[...of].map((g, i) => <span key={i} className="g">{g}</span>)}</span>
 );
+/** The face at either size: large on an empty console, small at the head of Aludel's latest line. */
+const Kaomoji = ({ mood, small }: { mood: keyof typeof FACE; small?: boolean }) => (
+  <span className={`kaomoji${small ? " small" : ""}`} role="img" aria-label="Aludel">
+    <Face of={FACE.idle} hidden={mood !== "idle"} />
+    <Face of={FACE[mood]} hidden={mood === "idle"} />
+  </span>
+);
 
 function Chat({ enabled }: { enabled: boolean }) {
   const [, force] = useState(0);
@@ -222,21 +229,29 @@ function Chat({ enabled }: { enabled: boolean }) {
       <div className="term-body" ref={body}>
         {chat.turns.length === 0 && (
           <div className="term-empty">
-            <div className="kaomoji" role="img" aria-label="Aludel">
-              <Face of={FACE.idle} hidden={mood !== "idle"} />
-              <Face of={FACE[mood]} hidden={mood === "idle"} />
-            </div>
+            <Kaomoji mood={mood} />
             <p className="term-hint">
               {enabled ? "Ask Aludel anything." : "The assistant isn't set up for this deployment (XAI_API_KEY)."}
             </p>
           </div>
         )}
-        {chat.turns.map((t, i) => (
-          <div key={i} className={t.role === "user" ? "term-line you" : "term-doc"}>
-            {t.role === "user" ? `$ ${t.content}` : t.content}
+        {/* the face travels: it heads Aludel's latest line, or the pending one while it thinks */}
+        {chat.turns.map((t, i) =>
+          t.role === "user" ? (
+            <div key={i} className="term-line you">{`$ ${t.content}`}</div>
+          ) : (
+            <div key={i} className="term-doc said">
+              {!busy && i === chat.turns.length - 1 && <Kaomoji mood={mood} small />}
+              <span>{t.content}</span>
+            </div>
+          )
+        )}
+        {busy && (
+          <div className="term-doc said">
+            <Kaomoji mood={mood} small />
+            <span className="term-line">…</span>
           </div>
-        ))}
-        {busy && <div className="term-line">…</div>}
+        )}
         {error && <div className="term-line err">{error}</div>}
       </div>
       <form className="term-input" onSubmit={(e) => (e.preventDefault(), send())}>

@@ -980,3 +980,8 @@ button.stop-row:active { background: rgba(255, 255, 255, 0.55); }
 .face { position: absolute; inset: 0; transition: opacity 0.18s ease; }
 .face.out { opacity: 0; }
 .face .g { display: inline-block; width: 0.78em; text-align: center; }
+/* in the conversation the face is text-sized, at the head of the line it belongs to */
+.term-doc.said { display: flex; align-items: flex-start; gap: 10px; }
+.kaomoji.small { flex: none; width: 3.9em; height: 1.65em; margin: 0; font-size: 13px; font-weight: 700; text-shadow: none; }
+.kaomoji.small .face { line-height: 1.65; }
+.kaomoji { display: block; }
