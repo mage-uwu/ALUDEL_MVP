@@ -211,38 +211,12 @@ const FACE = { idle: "(≧◡≦)", blink: "(-_-)", wink: "(^◡-)", wink2: "(-�
 const Face = ({ of, hidden }: { of: string; hidden: boolean }) => (
   <span className={`face${hidden ? " out" : ""}`}>{[...of].map((g, i) => <span key={i} className="g">{g}</span>)}</span>
 );
-/** The face at either size: large on an empty console, small at the end of Aludel's latest line. */
-const Kaomoji = ({ mood, small }: { mood: keyof typeof FACE; small?: boolean }) => (
-  <span className={`kaomoji${small ? " small" : ""}`} role="img" aria-label="Aludel">
-    <Face of={FACE.idle} hidden={mood !== "idle"} />
-    <Face of={FACE[mood]} hidden={mood === "idle"} />
-  </span>
-);
-
-/** The caret that opens the index of chats. */
-const Caret = () => (
-  <button className={`term-caret${chat.index ? " open" : ""}`} aria-label="Chats" aria-expanded={chat.index} onClick={() => showIndex(!chat.index)}>
-    <ChevronRight size={20} />
-  </button>
-);
-
-function Chat({ enabled }: { enabled: boolean }) {
-  const [, force] = useState(0);
+/**
+ * The face at either size: large on an empty console, small at the end of Aludel's
+ * latest line. It keeps its own blink, so a blink re-renders the face and nothing else.
+ */
+function Kaomoji({ small }: { small?: boolean }) {
   const [mood, setMood] = useState<keyof typeof FACE>("idle");
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [chats, setChats] = useState<ChatMeta[] | null>(null);
-  const [doomed, setDoomed] = useState<ChatMeta | null>(null);
-  const body = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const f = () => force((x) => x + 1);
-    chat.subs.add(f);
-    return () => void chat.subs.delete(f);
-  }, []);
-  useEffect(() => {
-    body.current?.scrollTo(0, 1e9);
-  });
   useEffect(() => {
     let n = 0;
     let back = 0;
@@ -255,6 +229,39 @@ function Chat({ enabled }: { enabled: boolean }) {
       clearTimeout(back);
     };
   }, []);
+  return (
+    <span className={`kaomoji${small ? " small" : ""}`} role="img" aria-label="Aludel">
+      <Face of={FACE.idle} hidden={mood !== "idle"} />
+      <Face of={FACE[mood]} hidden={mood === "idle"} />
+    </span>
+  );
+}
+
+/** The caret that opens the index of chats. */
+const Caret = () => (
+  <button className={`term-caret${chat.index ? " open" : ""}`} aria-label="Chats" aria-expanded={chat.index} onClick={() => showIndex(!chat.index)}>
+    <ChevronRight size={20} />
+  </button>
+);
+
+function Chat({ enabled }: { enabled: boolean }) {
+  const [, force] = useState(0);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [chats, setChats] = useState<ChatMeta[] | null>(null);
+  const [doomed, setDoomed] = useState<ChatMeta | null>(null);
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const f = () => force((x) => x + 1);
+    chat.subs.add(f);
+    return () => void chat.subs.delete(f);
+  }, []);
+  // follow the conversation, and only the conversation: a new turn or a streamed chunk
+  // scrolls to the bottom; nothing else may move a reader who has scrolled up
+  useEffect(() => {
+    body.current?.scrollTo(0, 1e9);
+  }, [chat.turns]);
   // pick up where the last visit left off
   useEffect(() => {
     const last = recall("chat");
@@ -319,7 +326,7 @@ function Chat({ enabled }: { enabled: boolean }) {
       <div className="term-body" ref={body}>
         {chat.turns.length === 0 && (
           <div className="term-empty">
-            <Kaomoji mood={mood} />
+            <Kaomoji />
             <p className="term-hint">
               {enabled ? "Ask Aludel anything." : "The assistant isn't set up for this deployment (XAI_API_KEY)."}
             </p>
@@ -332,7 +339,7 @@ function Chat({ enabled }: { enabled: boolean }) {
           ) : (
             <div key={i} className="term-doc said">
               <span>{t.content}</span>
-              {i === chat.turns.length - 1 && <Kaomoji mood={mood} small />}
+              {i === chat.turns.length - 1 && <Kaomoji small />}
             </div>
           )
         )}
