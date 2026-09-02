@@ -10,6 +10,7 @@ import {
   type Role,
 } from "../shared/model";
 import { applyPlan, configured, optimize, readInput } from "./optimize";
+import { ask, readTurns } from "./chat";
 import {
   currentUser,
   finishLogin,
@@ -44,6 +45,9 @@ export interface Env {
   GOOGLE_SA_PRIVATE_KEY?: string;
   /** Test hook only: a base URL standing in for Google's token and optimizeTours endpoints. */
   OPTIMIZE_ENDPOINT?: string;
+  /** xAI key for the assistant (secret); XAI_ENDPOINT is a test hook standing in for api.x.ai/v1. */
+  XAI_API_KEY?: string;
+  XAI_ENDPOINT?: string;
 }
 
 const HEADERS = {
@@ -580,7 +584,20 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
         mapId: env.GOOGLE_MAPS_MAP_ID || "DEMO_MAP_ID",
         optimize: configured(env),
       },
+      assistant: !!env.XAI_API_KEY,
     });
+  }
+
+  // the assistant: the client keeps the conversation, the Worker keeps the key
+  if (path === "/chat" && req.method === "POST") {
+    if (!env.XAI_API_KEY) return error(503, "The assistant is not set up for this deployment");
+    const turns = readTurns((await readBody(req))?.turns);
+    if (!turns) return error(422, "A conversation of up to 20 turns, ending with you");
+    try {
+      return json({ reply: await ask(env, `aludel-${user.id}`, turns) });
+    } catch (e) {
+      return error(502, (e as Error).message);
+    }
   }
 
   if (path === "/teams" && req.method === "POST") {

@@ -48,6 +48,12 @@ wrangler secret put GOOGLE_SERVICE_ACCOUNT < aludel-optimizer-key.json
 the Optimize sheet says so. Each run is one `optimizeTours` call
 (30 s solver budget, 120 s above 40 stops, live traffic when the window starts within a day).
 
+**Assistant**: the console beside the phone on wide screens, and an Assistant screen in the menu
+on a phone, is a plain chat with xAI's Grok (`grok-4.6`). The Worker holds the key and adds a fixed
+system prompt; the client sends the conversation so far (up to 20 turns) and shows plain text
+back. Nothing else is wired into it yet: no team data, no tools. Set `XAI_API_KEY` as a secret;
+until then the pane says so.
+
 ## Auth and tenancy
 
 Sign-in is Google OAuth (authorization code + PKCE, with `state` and `nonce`), and every

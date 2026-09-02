@@ -39,6 +39,8 @@ interface Me {
   user: Account;
   teams: TeamRef[];
   maps: MapsConfig;
+  /** Whether the server holds an xAI key for the assistant. */
+  assistant: boolean;
 }
 interface Member {
   id: string;
@@ -143,8 +145,6 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "content-type": "application/json" },
     ...init,
   });
-  const short = path.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/i, (m) => `${m.slice(0, 8)}…`);
-  termLog(`$ ${init?.method ?? "GET"} /api${short} → ${res.status}`);
   if (res.status === 401) throw new Unauthorized("Sign in required");
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -153,67 +153,108 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// Wide-screen console pane: a tiny external store the Terminal subscribes to.
-const term = { lines: [] as string[], doc: "", subs: new Set<() => void>() };
-const termLog = (line: string) => {
-  term.lines = [...term.lines.slice(-39), line];
-  term.subs.forEach((f) => f());
+// ——— assistant: one plain chat with Grok, kept for the session across screens ———
+interface Turn {
+  role: "user" | "assistant";
+  content: string;
+}
+const chat = { turns: [] as Turn[], subs: new Set<() => void>() };
+const setTurns = (turns: Turn[]) => {
+  chat.turns = turns;
+  chat.subs.forEach((f) => f());
 };
-const termDoc = (doc: string) => {
-  term.doc = doc;
-  term.subs.forEach((f) => f());
-};
 
-const dumpTemplate = (t: Loaded): string =>
-  [
-    `template "${t.name}"  v${t.version}`,
-    ...t.tasks.flatMap((k) => [
-      ``,
-      `  task "${k.name}"`,
-      ...k.blocks.map((b) =>
-        b.kind === "buttons"
-          ? `    buttons "${b.label}"  ${b.options.map((o) => `[${o.toUpperCase()}]`).join(" ")}`
-          : `    ${b.kind.padEnd(6)} "${b.label}"${b.unit ? `  (${b.unit})` : ""}`
-      ),
-    ]),
-  ].join("\n");
-
-const BANNER = [
-  "    _     _      _   _  ____   _____  _     ",
-  "   / \\   | |    | | | ||  _ \\ | ____|| |    ",
-  "  / _ \\  | |    | | | || | | ||  _|  | |    ",
-  " / ___ \\ | |___ | |_| || |_| || |___ | |___ ",
-  "/_/   \\_\\|_____| \\___/ |____/ |_____||_____|",
-  "",
-].join("\n");
-
-function Terminal() {
+function Chat({ enabled }: { enabled: boolean }) {
   const [, force] = useState(0);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const f = () => force((x) => x + 1);
-    term.subs.add(f);
-    return () => void term.subs.delete(f);
+    chat.subs.add(f);
+    return () => void chat.subs.delete(f);
   }, []);
   useEffect(() => {
     body.current?.scrollTo(0, 1e9);
   });
+
+  const send = async () => {
+    const content = draft.trim();
+    if (!content || busy) return;
+    const turns = [...chat.turns, { role: "user" as const, content }].slice(-20);
+    setTurns(turns);
+    setDraft("");
+    setBusy(true);
+    setError("");
+    try {
+      const { reply } = await api<{ reply: string }>("/chat", { method: "POST", body: JSON.stringify({ turns }) });
+      setTurns([...turns, { role: "assistant", content: reply }]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <aside className="terminal" aria-hidden="true">
+    <>
+      <div className="term-body" ref={body}>
+        {chat.turns.length === 0 && (
+          <p className="term-hint">
+            {enabled ? "Ask about the job. Plain answers, nothing fancy." : "The assistant isn't set up for this deployment (XAI_API_KEY)."}
+          </p>
+        )}
+        {chat.turns.map((t, i) => (
+          <div key={i} className={t.role === "user" ? "term-line you" : "term-doc"}>
+            {t.role === "user" ? `$ ${t.content}` : t.content}
+          </div>
+        ))}
+        {busy && <div className="term-line">…</div>}
+        {error && <div className="term-line err">{error}</div>}
+      </div>
+      <form className="term-input" onSubmit={(e) => (e.preventDefault(), send())}>
+        <span className="prompt" aria-hidden="true">$</span>
+        <input
+          value={draft}
+          disabled={!enabled || busy}
+          placeholder={enabled ? "Ask…" : ""}
+          maxLength={4000}
+          onChange={(e) => setDraft(e.target.value)}
+          aria-label="Message"
+        />
+        <button className="term-send" type="submit" disabled={!enabled || busy || !draft.trim()} aria-label="Send">↵</button>
+      </form>
+    </>
+  );
+}
+
+/** The wide-screen pane: the assistant in a jet-black console. */
+function Console({ enabled }: { enabled: boolean }) {
+  return (
+    <aside className="terminal">
       <div className="term-bar">
         <span className="dot red" /><span className="dot yellow" /><span className="dot green" />
         <Logo size={14} className="term-mark" />
-        <span className="term-title">aludel — console</span>
+        <span className="term-title">aludel — assistant</span>
       </div>
-      <div className="term-body" ref={body}>
-        <pre className="term-banner">{BANNER}</pre>
-        {term.lines.map((l, i) => (
-          <div key={i} className="term-line">{l}</div>
-        ))}
-        {term.doc && <pre className="term-doc">{term.doc}</pre>}
-        <div className="term-line">$ <span className="caret" /></div>
-      </div>
+      <Chat enabled={enabled} />
     </aside>
+  );
+}
+
+/** The same assistant on a phone, as its own screen. */
+function AssistantScreen({ enabled, onBack }: { enabled: boolean; onBack: () => void }) {
+  return (
+    <div className="shell assistant">
+      <header className="editor-top">
+        <button className="icon-btn" onClick={onBack} aria-label="Back"><ChevronLeft /></button>
+        <h1 className="site-title">Assistant</h1>
+      </header>
+      <div className="chat-card">
+        <Chat enabled={enabled} />
+      </div>
+    </div>
   );
 }
 
@@ -268,7 +309,7 @@ function useSortable(onMove: (from: number, to: number) => void) {
 export default function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [teamId, setTeamId] = useState<string | null>(() => recall("team"));
-  const [screen, setScreen] = useState<"templates" | "members">("templates");
+  const [screen, setScreen] = useState<"templates" | "members" | "assistant">("templates");
   const [section, setSection] = useState<Section>(() => SECTIONS.find((s) => s.key === recall("section"))?.key ?? "templates");
   const [openId, setOpenId] = useState<string | null>(null);
   const [openSite, setOpenSite] = useState<string | null>(null);
@@ -308,6 +349,7 @@ export default function App() {
     if (!team) return <NewTeam onCreated={load} />;
     if (screen === "members")
       return <Members team={team} me={me} onBack={() => setScreen("templates")} onChanged={load} />;
+    if (screen === "assistant") return <AssistantScreen enabled={me.assistant} onBack={() => setScreen("templates")} />;
     if (openId) return <Editor teamId={team.id} id={openId} onBack={() => setOpenId(null)} />;
     if (openSite) return <SiteEditor teamId={team.id} id={openSite} maps={me.maps} onBack={() => setOpenSite(null)} />;
     const head = (
@@ -317,6 +359,7 @@ export default function App() {
         section={section}
         onSection={setSection}
         onMembers={() => setScreen("members")}
+        onAssistant={() => setScreen("assistant")}
         onSwitch={setTeamId}
       />
     );
@@ -327,7 +370,7 @@ export default function App() {
 
   return (
     <div className="layout">
-      <Terminal />
+      <Console enabled={me?.assistant ?? false} />
       {/* On wide screens the app runs in a phone-shaped frame — the aspect
           and the dark chassis carry it, no imitation hardware. */}
       <div className="device">
@@ -465,6 +508,7 @@ function HomeHeader({
   section,
   onSection,
   onMembers,
+  onAssistant,
   onSwitch,
 }: {
   team: TeamRef;
@@ -472,6 +516,7 @@ function HomeHeader({
   section: Section;
   onSection: (s: Section) => void;
   onMembers: () => void;
+  onAssistant: () => void;
   onSwitch: (id: string) => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -508,6 +553,10 @@ function HomeHeader({
                 </button>
               ))}
               <div className="menu-sep" />
+              {/* on a wide screen the assistant is already beside the phone */}
+              <button className="menu-item narrow-only" role="menuitem" onClick={() => { setMenu(false); onAssistant(); }}>
+                Assistant
+              </button>
               <button className="menu-item" role="menuitem" onClick={() => { setMenu(false); onMembers(); }}>
                 Members
               </button>
@@ -559,12 +608,7 @@ function Home({
 
   useEffect(() => {
     setList(null);
-    api<Meta[]>(`/teams/${team.id}/templates`).then((xs) => {
-      setList(xs);
-      termDoc(
-        [`templates (${xs.length})`, ...xs.map((t) => `  ${t.name}  v${t.version}`)].join("\n")
-      );
-    }, (e) => setError(e.message));
+    api<Meta[]>(`/teams/${team.id}/templates`).then(setList, (e) => setError(e.message));
   }, [team.id]);
 
   const create = async () => {
@@ -628,10 +672,6 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
       setSaved(JSON.stringify({ name: t.name, tasks: t.tasks }));
     }, (e) => setError(e.message));
   }, [teamId, id]);
-
-  useEffect(() => {
-    if (tpl) termDoc(dumpTemplate(tpl));
-  }, [tpl]);
 
   const taskSort = useSortable((from, to) =>
     setTpl((p) => p && { ...p, tasks: reorder(p.tasks, from, to) })
@@ -1083,15 +1123,6 @@ function Sites({
     ]).then(([ls, ss]) => {
       setLists(ls);
       setSites(ss);
-      termDoc(
-        [
-          `sites (${ss.length}) in ${plural(ls.length, "list")}`,
-          ...ss.map(
-            (x) =>
-              `  ${(x.listName ?? "unlisted").padEnd(14)} ${x.clientName}${x.dispatches ? `  ⇢ ${plural(x.dispatches, "template")}` : ""}`
-          ),
-        ].join("\n")
-      );
     }, (e) => setError(e.message));
   };
   useEffect(load, [team.id]);
@@ -1191,23 +1222,6 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
     api<ListRef[]>(`/teams/${teamId}/lists`).then(setLists, () => setLists([]));
     api<Meta[]>(`/teams/${teamId}/templates`).then(setTemplates, () => setTemplates([]));
   }, [teamId, id]);
-
-  useEffect(() => {
-    if (!site) return;
-    const listName = lists.find((l) => l.id === site.listId)?.name ?? "unlisted";
-    termDoc(
-      [
-        `site "${site.clientName}"`,
-        `  ${site.place ? `${site.place.formattedAddress}  (${site.place.lat.toFixed(5)}, ${site.place.lng.toFixed(5)})` : "—"}`,
-        ...(site.locationNote ? [`  note: ${site.locationNote}`] : []),
-        `  ${site.emails.join(", ") || "—"}  ·  ${listName}`,
-        ``,
-        ...(site.dispatches.length
-          ? site.dispatches.map((d) => `  ⇢ "${d.templateName}"  v${d.templateVersion}`)
-          : [`  (nothing dispatched)`]),
-      ].join("\n")
-    );
-  }, [site, lists]);
 
   if (!site) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
 
@@ -1654,15 +1668,6 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
     const ids = g.sites.filter((s) => s.place).map((s) => s.id);
     return (g.id && plan?.routes.find((r) => r.stops.length === ids.length && r.stops.every((s, i) => s.siteId === ids[i]))) || null;
   };
-
-  useEffect(() => {
-    termDoc(
-      [
-        `map: ${plural(sites.filter((s) => s.place).length, "located site")} of ${sites.length}${depot ? `  ·  depot ${depot.name}` : ""}`,
-        ...groups.flatMap((g) => [``, `  ${g.name}${routeFor(g) ? "  (optimized)" : ""}`, ...g.sites.map((s, i) => `    ${i + 1}. ${s.clientName}${s.place ? "" : "  — no location"}`)]),
-      ].join("\n")
-    );
-  }, [groups, depot, plan]);
 
   useEffect(() => {
     const key = me.maps.key;
