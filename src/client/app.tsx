@@ -1130,6 +1130,7 @@ function Members({
   const [role, setRole] = useState<"member" | "admin">("member");
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
+  const [teamName, setTeamName] = useState(team.name);
   const [tokens, setTokens] = useState<TokenRef[]>([]);
   const [tokenName, setTokenName] = useState("");
   const [minted, setMinted] = useState("");
@@ -1155,6 +1156,8 @@ function Members({
       setError((e as Error).message);
     }
   };
+
+  const rename = guard(() => api(`/teams/${team.id}`, { method: "PATCH", body: JSON.stringify({ name: teamName.trim() }) }));
 
   const mint = guard(async () => {
     const res = await api<{ token: string }>(`/teams/${team.id}/tokens`, { method: "POST", body: JSON.stringify({ name: tokenName }) });
@@ -1185,6 +1188,17 @@ function Members({
       </header>
 
       {error && <p className="error">{error}</p>}
+
+      {admin && (
+        <section className="card glass-frosted invite-box">
+          <p className="section-label">Team name</p>
+          <div className="invite-row">
+            <input className="text-input left" value={teamName} maxLength={80} onChange={(e) => setTeamName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && teamName.trim() && teamName.trim() !== team.name && rename()} aria-label="Team name" />
+            <button className="big-btn" disabled={!teamName.trim() || teamName.trim() === team.name} onClick={rename}>Rename</button>
+          </div>
+        </section>
+      )}
 
       {members?.map((m) => (
         <div key={m.id} className="card glass-frosted member-row">

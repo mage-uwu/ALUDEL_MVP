@@ -758,6 +758,13 @@ async function teamRoutes(
     return json({ ok: true });
   }
 
+  if (rest === "" && req.method === "PATCH") {
+    if (!admin) return error(403, "Admins only");
+    const name = field((await readBody(req))?.name, LIMITS.name);
+    if (!name) return error(422, "Team name required");
+    await env.DB.prepare("UPDATE teams SET name = ? WHERE id = ?").bind(name, teamId).run();
+    return json({ ok: true, name });
+  }
   if (rest === "" && req.method === "DELETE") {
     if (role !== "owner") return error(403, "Owners only");
     await env.DB.prepare("DELETE FROM teams WHERE id = ?").bind(teamId).run();
