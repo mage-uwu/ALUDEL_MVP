@@ -1387,6 +1387,8 @@ function PlaceSheet({
   const mapHost = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const markerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+  // picks are numbered so a slow fetch can never overwrite a later pick
+  const pick = useRef(0);
 
   useEffect(() => {
     const key = maps.key;
@@ -1407,17 +1409,15 @@ function PlaceSheet({
         picker.setAttribute("aria-label", "Search for a place");
         picker.addEventListener("gmp-select", async (ev) => {
           const { placePrediction } = ev as google.maps.places.PlacePredictionSelectEvent;
-          try {
-            const p = placePrediction.toPlace();
-            // exactly one fetch per pick: this call closes the autocomplete session
-            await p.fetchFields({ fields: PLACE_FIELDS });
-            const next = toAludelPlace(p);
-            if (!next)
-              return setAlert({ title: "No location for that", message: "Google returned that place without coordinates. Try a more specific address." });
-            setDraft(next);
-          } catch {
-            setAlert({ title: "Couldn't fetch that place", message: "Google didn't return its details. Check the connection and try again." });
-          }
+          const mine = ++pick.current;
+          // exactly one fetch per pick: this call closes the autocomplete session
+          const next = await placePrediction
+            .toPlace()
+            .fetchFields({ fields: PLACE_FIELDS })
+            .then(({ place }) => toAludelPlace(place), () => null);
+          if (!live || mine !== pick.current) return;
+          if (next) setDraft(next);
+          else setAlert({ title: "Couldn't use that place", message: "Google didn't return a location for it. Try a more specific address." });
         });
         pickerHost.current.replaceChildren(picker);
 

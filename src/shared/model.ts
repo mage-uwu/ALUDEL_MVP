@@ -99,7 +99,7 @@ export function normalizeTemplate(input: unknown): Template | null {
 // normalized into this plain record before it is stored. The live google.maps
 // Place object never leaves the browser; this is the only shape the server keeps.
 
-export interface PlaceViewport {
+interface PlaceViewport {
   north: number;
   south: number;
   east: number;
@@ -131,7 +131,7 @@ export interface AludelPlace {
   fetchedAt: string;
 }
 
-export const PLACE_LIMITS = { id: 512, text: 240, part: 120, types: 20 } as const;
+const PLACE_LIMITS = { id: 512, text: 240, part: 120, types: 20 } as const;
 
 const ADDRESS_KEYS: readonly (keyof AddressParts)[] = [
   "streetNumber", "route", "locality", "adminArea1", "adminArea2", "postalCode", "country", "countryCode",
@@ -140,12 +140,9 @@ const ADDRESS_KEYS: readonly (keyof AddressParts)[] = [
 const num = (v: unknown, min: number, max: number): number | null =>
   typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : null;
 
-const isoOrNow = (v: unknown): string =>
-  typeof v === "string" && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : new Date().toISOString();
-
 /**
  * Clamp an untrusted place into a valid AludelPlace, or null if it cannot be one:
- * no Google id, no usable coordinates, or nothing to call it by.
+ * no Google id, no usable coordinates, nothing to call it by, or no fetch time.
  */
 export function normalizePlace(input: unknown): AludelPlace | null {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
@@ -155,7 +152,8 @@ export function normalizePlace(input: unknown): AludelPlace | null {
   const lng = num(p.lng, -180, 180);
   const formattedAddress = str(p.formattedAddress, PLACE_LIMITS.text, "");
   const name = str(p.name, PLACE_LIMITS.text, formattedAddress);
-  if (!googlePlaceId || lat === null || lng === null || !name) return null;
+  const fetchedAt = typeof p.fetchedAt === "string" ? Date.parse(p.fetchedAt) : NaN;
+  if (!googlePlaceId || lat === null || lng === null || !name || Number.isNaN(fetchedAt)) return null;
 
   const address: AddressParts = {};
   const parts = rec(p.address);
@@ -184,6 +182,6 @@ export function normalizePlace(input: unknown): AludelPlace | null {
     ...(viewport ? { viewport } : {}),
     address,
     types,
-    fetchedAt: isoOrNow(p.fetchedAt),
+    fetchedAt: new Date(fetchedAt).toISOString(),
   };
 }

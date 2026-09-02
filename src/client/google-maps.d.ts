@@ -83,15 +83,7 @@ declare namespace google.maps {
     interface PlacePredictionSelectEvent extends Event {
       placePrediction: PlacePrediction;
     }
-    interface PlaceAutocompleteElementOptions {
-      includedRegionCodes?: string[];
-      requestedLanguage?: string;
-      requestedRegion?: string;
-    }
-    class PlaceAutocompleteElement extends HTMLElement {
-      constructor(opts?: PlaceAutocompleteElementOptions);
-      includedRegionCodes: string[] | null;
-    }
+    class PlaceAutocompleteElement extends HTMLElement {}
   }
 }
 
