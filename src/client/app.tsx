@@ -427,7 +427,7 @@ const reorder = <T,>(xs: T[], from: number, to: number): T[] => {
 // Touch-friendly drag-to-reorder over a vertical list. The handle carries
 // touch-action:none so the gesture never turns into a scroll; items reorder
 // live once the pointer crosses a sibling's midpoint.
-function useSortable(onMove: (from: number, to: number) => void) {
+function useSortable(onMove: (from: number, to: number) => void, onEnd?: () => void) {
   const ref = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(-1);
   const at = useRef(-1);
@@ -436,6 +436,7 @@ function useSortable(onMove: (from: number, to: number) => void) {
     e.preventDefault();
     at.current = index;
     setDragging(index);
+    let moved = false;
     const onPointerMove = (ev: PointerEvent) => {
       const kids = ref.current ? ([...ref.current.children] as HTMLElement[]) : [];
       const from = at.current;
@@ -449,11 +450,13 @@ function useSortable(onMove: (from: number, to: number) => void) {
         onMove(from, to);
         at.current = to;
         setDragging(to);
+        moved = true;
       }
     };
     const end = () => {
       at.current = -1;
       setDragging(-1);
+      if (moved) onEnd?.();
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", end);
       window.removeEventListener("pointercancel", end);
@@ -464,6 +467,33 @@ function useSortable(onMove: (from: number, to: number) => void) {
   };
   return { ref, dragging, start };
 }
+
+/** A list whose rows reorder by their handle: each row gets its drag state and the handle's pointerdown. */
+function Sortable<T extends { id: string }>({
+  items,
+  onMove,
+  onEnd,
+  children,
+}: {
+  items: T[];
+  onMove: (from: number, to: number) => void;
+  onEnd: () => void;
+  children: (item: T, dragging: boolean, onHandleDown: (e: React.PointerEvent) => void) => React.ReactNode;
+}) {
+  const sort = useSortable(onMove, onEnd);
+  return <div className="sortable" ref={sort.ref}>{items.map((x, i) => children(x, sort.dragging === i, sort.start(i)))}</div>;
+}
+
+/** The team's sites with one list's order changed; positions follow the new order. */
+const moveSite = (sites: SiteRow[], listId: string | null, from: number, to: number): SiteRow[] => [
+  ...sites.filter((x) => x.listId !== listId),
+  ...reorder(sites.filter((x) => x.listId === listId), from, to).map((x, position) => ({ ...x, position })),
+];
+const saveOrder = (teamId: string, sites: SiteRow[], listId: string | null) =>
+  api(`/teams/${teamId}/sites/order`, {
+    method: "PUT",
+    body: JSON.stringify({ listId, ids: sites.filter((x) => x.listId === listId).map((x) => x.id) }),
+  });
 
 export default function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
@@ -1526,6 +1556,8 @@ function Sites({
   const [lists, setLists] = useState<ListRef[] | null>(null);
   const [sites, setSites] = useState<SiteRow[] | null>(null);
   const [error, setError] = useState("");
+  // the order as of the last move, read when the drag ends
+  const latest = useRef<SiteRow[]>([]);
 
   const load = () => {
     Promise.all([
@@ -1533,10 +1565,16 @@ function Sites({
       api<SiteRow[]>(`/teams/${team.id}/sites`),
     ]).then(([ls, ss]) => {
       setLists(ls);
-      setSites(ss);
+      setSites((latest.current = ss));
     }, (e) => setError(e.message));
   };
   useEffect(load, [team.id]);
+  const move = (listId: string | null) => (from: number, to: number) => setSites((latest.current = moveSite(latest.current, listId, from, to)));
+  const persist = (listId: string | null) => () =>
+    saveOrder(team.id, latest.current, listId).catch((e) => {
+      setError((e as Error).message);
+      load();
+    });
 
   const create = async () => {
     try {
@@ -1556,19 +1594,22 @@ function Sites({
   const unlisted = (sites ?? []).filter((x) => !x.listId);
   if (unlisted.length) groups.push({ key: "none", name: "Unlisted", list: null, rows: unlisted });
 
-  const row = (x: SiteRow) => (
-    <button key={x.id} className="card glass-frosted template-card" onClick={() => onOpen(x.id)}>
-      <span className="template-text">
-        <span className="template-name">{x.clientName}</span>
-        <span className="template-meta">
-          {[x.address, x.emails[0] && (x.emails.length > 1 ? `${x.emails[0]} +${x.emails.length - 1}` : x.emails[0])]
-            .filter(Boolean)
-            .join(" · ") || "No address yet"}
+  const row = (x: SiteRow, dragging: boolean, onHandleDown: (e: React.PointerEvent) => void) => (
+    <div key={x.id} className={`card glass-frosted template-card site-row${dragging ? " dragging" : ""}`}>
+      <button className="icon-btn handle" aria-label={`Drag ${x.clientName} to reorder`} onPointerDown={onHandleDown}><Grip /></button>
+      <button className="site-open" onClick={() => onOpen(x.id)}>
+        <span className="template-text">
+          <span className="template-name">{x.clientName}</span>
+          <span className="template-meta">
+            {[x.address, x.emails[0] && (x.emails.length > 1 ? `${x.emails[0]} +${x.emails.length - 1}` : x.emails[0])]
+              .filter(Boolean)
+              .join(" · ") || "No address yet"}
+          </span>
         </span>
-      </span>
-      {x.dispatches > 0 && <span className="version">{x.dispatches} ⇢</span>}
-      <span className="chevron" aria-hidden="true"><ChevronRight /></span>
-    </button>
+        {x.dispatches > 0 && <span className="version">{x.dispatches} ⇢</span>}
+        <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+      </button>
+    </div>
   );
 
   return (
@@ -1582,7 +1623,7 @@ function Sites({
             <span className={`group-name${g.list ? "" : " muted"}`}>{g.name}</span>
             <span className="group-count">{plural(g.rows.length, "site")}</span>
           </div>
-          {g.rows.map(row)}
+          <Sortable items={g.rows} onMove={move(g.list?.id ?? null)} onEnd={persist(g.list?.id ?? null)}>{row}</Sortable>
           {g.rows.length === 0 && <p className="group-empty">No sites in this list yet.</p>}
         </section>
       ))}
@@ -2046,12 +2087,20 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
       api<{ depot: AludelPlace | null; plan: RoutePlan | null }>(`/teams/${team.id}/plan`),
     ]).then(([ls, ss, p]) => {
       setLists(ls);
-      setSites(ss);
+      setSites((latest.current = ss));
       setDepot(p.depot);
       setPlan(p.plan);
     }, (e) => setError(e.message));
   };
   useEffect(load, [team.id]);
+  // the order as of the last move, read when the drag ends
+  const latest = useRef<SiteRow[]>([]);
+  const move = (listId: string | null) => (from: number, to: number) => setSites((latest.current = moveSite(latest.current, listId, from, to)));
+  const persist = (listId: string | null) => () =>
+    saveOrder(team.id, latest.current, listId).catch((e) => {
+      setError((e as Error).message);
+      load();
+    });
 
   const groups = useMemo<RouteGroup[]>(
     () =>
@@ -2208,16 +2257,23 @@ function MapScreen({ team, head, me, onOpen }: { team: TeamRef; head: React.Reac
                 )}
               </div>
             )}
-            {g.sites.map((s) => (
-              <button key={s.id} className="stop-row" onClick={() => onOpen(s.id)}>
-                <span className="stop-n" style={{ background: s.place ? g.color : "#c9cdd3" }}>{s.place ? g.numbers[s.id] : "·"}</span>
-                <span className="template-text">
-                  <span className="member-name">{s.clientName}</span>
-                  <span className="template-meta">{s.place?.formattedAddress ?? "No location yet"}</span>
-                </span>
-                <span className="chevron" aria-hidden="true"><ChevronRight /></span>
-              </button>
-            ))}
+            <Sortable items={g.sites} onMove={move(g.id)} onEnd={persist(g.id)}>
+              {(s, dragging, onHandleDown) => (
+                <div key={s.id} className={`stop-row${dragging ? " dragging" : ""}`}>
+                  {g.sites.length === g.total && (
+                    <button className="icon-btn handle" aria-label={`Drag ${s.clientName} to reorder`} onPointerDown={onHandleDown}><Grip /></button>
+                  )}
+                  <button className="site-open" onClick={() => onOpen(s.id)}>
+                    <span className="stop-n" style={{ background: s.place ? g.color : "#c9cdd3" }}>{s.place ? g.numbers[s.id] : "·"}</span>
+                    <span className="template-text">
+                      <span className="member-name">{s.clientName}</span>
+                      <span className="template-meta">{s.place?.formattedAddress ?? "No location yet"}</span>
+                    </span>
+                    <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+                  </button>
+                </div>
+              )}
+            </Sortable>
           </section>
         );
       })}

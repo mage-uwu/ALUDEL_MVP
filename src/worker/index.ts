@@ -320,6 +320,20 @@ async function teamRoutes(
     return error(405, "Method not allowed");
   }
 
+  // the order of one list's sites (null: the unlisted ones), as the ids in order
+  if (rest === "/sites/order" && req.method === "PUT") {
+    const body = await readBody(req);
+    const listId = await listFor(body?.listId);
+    if (listId === undefined) return error(422, "Unknown list");
+    const ids = Array.isArray(body?.ids) ? (body.ids as unknown[]) : null;
+    if (!ids || ids.length > 500 || !ids.every((x) => typeof x === "string" && new RegExp(`^${UUID}$`).test(x))) return error(422, "Invalid order");
+    if (ids.length)
+      await env.DB.batch(
+        ids.map((id, i) => env.DB.prepare("UPDATE sites SET position = ? WHERE id = ? AND team_id = ? AND list_id IS ?").bind(i, id, teamId, listId))
+      );
+    return json({ ok: true });
+  }
+
   const site = rest.match(new RegExp(`^/sites/(${UUID})(?:/dispatches(?:/(${UUID}))?)?$`));
   if (site) {
     const siteId = site[1]!;

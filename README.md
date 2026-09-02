@@ -16,7 +16,9 @@ and stored as a normalized `AludelPlace` record (place id, name, formatted addre
 viewport, address parts, fetch time) that the server re-validates through `normalizePlace`. Dispatching *borrows* a
 template for a worksite: the dispatch references the template rather than copying it, records the
 version it was borrowed at, and the site's metadata rides along by association. A site can hold
-one dispatch per template, and deleting a list leaves its sites in place, unlisted.
+one dispatch per template, and deleting a list leaves its sites in place, unlisted. Every row
+carries a drag handle: the order you drag sites into, on Sites or on a Map card, is the list's
+stored order, so it is the order the pins take and the route follows.
 
 **Map**: every located site on one map, pinned and numbered by list, with a line through each
 list in its stored order. **Optimize** hands all located sites to the Google Maps Platform
