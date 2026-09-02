@@ -202,7 +202,7 @@ function Chat({ enabled }: { enabled: boolean }) {
       <div className="term-body" ref={body}>
         {chat.turns.length === 0 && (
           <p className="term-hint">
-            {enabled ? "Ask about the job. Plain answers, nothing fancy." : "The assistant isn't set up for this deployment (XAI_API_KEY)."}
+            {enabled ? "Ask Aludel anything." : "The assistant isn't set up for this deployment (XAI_API_KEY)."}
           </p>
         )}
         {chat.turns.map((t, i) => (

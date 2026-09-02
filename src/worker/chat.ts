@@ -5,10 +5,7 @@ import type { Env } from "./index";
 
 const MODEL = "grok-4.6";
 const XAI = "https://api.x.ai/v1";
-const SYSTEM =
-  "You are Aludel's assistant for field-service crews: pools, hot tubs, plumbing and the like. " +
-  "Answer in plain text only, no markdown, no bullet symbols. Be short and concrete, like a good dispatcher. " +
-  "If you don't know something, say so; never invent addresses, prices or names.";
+const SYSTEM = "You are Aludel, a powerful and professional AI assistant.";
 export const CHAT = { turns: 20, chars: 4000 } as const;
 
 export interface Turn {
