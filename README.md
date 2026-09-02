@@ -58,6 +58,29 @@ you were in comes back on reload. The model sees the last 20 turns. Nothing else
 team data, no tools. Set `XAI_API_KEY` as a secret; until then the pane says so. The Durable Object
 needs no setup; Cloudflare provisions it on deploy.
 
+**Field**: what a crew can file — every template dispatched to a site — and what was filed lately.
+Pick one, fill it (text, numbers with their unit, one key of a buttons block; photos come next),
+say when it was done, and file it. A report can only be filed against a dispatch, so it always
+names a real site and a real template version.
+
+**Vault**: every filed report, append-only, in the team's own SQLite-backed Durable Object
+(`Vault`, keyed by team id). A report is the record: site, template and version, who, when, the
+filled document and its SHA-256. Each filled block also becomes one typed **fact** row (number in
+`num`, text and the pressed key in `text`, plus label, kind, unit and time), so a labelled block is
+a series across the whole stack and the stack is queryable in one shape:
+
+```jsonc
+POST /api/teams/:id/vault/query
+{ "template": "…", "site": "…", "from": "2025-11-01", "to": "2026-03-01",
+  "where": [{ "label": "temp", "num": { "lt": 40 } }],            // every clause: some fact of the report matches
+  "select": { "rows": true, "limit": 50 } }                        // or { "agg": "sum", "label": "cost", "groupBy": "site" }
+```
+
+Atoms are versioned by template: `{ "atom": { "template", "block" } }` names exactly one block of one
+template, while `label` reaps every block whose label contains the word, across templates — similar,
+but different, until you filter by template. The shape compiles to parameterised SQL inside the
+team's object, so it cannot be injected and cannot cross teams; it is the tool an agent gets.
+
 ## Auth and tenancy
 
 Sign-in is Google OAuth (authorization code + PKCE, with `state` and `nonce`), and every

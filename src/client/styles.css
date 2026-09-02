@@ -1054,3 +1054,34 @@ button.stop-row:active { background: rgba(255, 255, 255, 0.55); }
 .chat-index .icon-btn { color: #6d747d; }
 .chat-index .icon-btn:active { background: rgba(255, 255, 255, 0.1); }
 .terminal .modal-scrim { position: absolute; border-radius: 30px; }
+
+/* field: filling a template, reading a report */
+.task-title { margin: 0; font-size: 21px; font-weight: 800; padding: 4px; }
+.block.fill { gap: 8px; }
+.fill-label { margin: 0; padding: 0 4px; font-size: 16px; font-weight: 700; }
+.unit-chip {
+  flex: none;
+  align-self: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  background: var(--ti-light);
+  color: #43474e;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 3px rgba(28, 32, 38, 0.15);
+}
+.number-row .unit-chip { margin-left: 8px; }
+/* a key that is pressed: dark titanium, like the primary action */
+.button-key.press { cursor: pointer; transition: transform 0.08s ease; }
+.button-key.press:active { transform: translateY(1px); }
+.button-key.press.on {
+  background: var(--ti-dark);
+  color: #f4f5f7;
+  border-color: #1d1f23;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+}
+.button-key.static { display: inline-flex; align-items: center; justify-content: center; flex: 0 1 auto; min-width: 130px; padding: 0 22px; }
+.photo-drop.soon { color: var(--muted); font-weight: 600; min-height: 96px; }
+.report-value { margin: 0; padding: 12px 16px; border-radius: 12px; background: rgba(255, 255, 255, 0.55); font-size: 16px; font-weight: 700; white-space: pre-wrap; display: flex; align-items: center; gap: 10px; }

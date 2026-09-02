@@ -56,11 +56,12 @@ interface Invite {
   expiresAt: string;
 }
 
-type Section = "templates" | "sites" | "map";
+type Section = "templates" | "sites" | "map" | "field";
 const SECTIONS: { key: Section; title: string }[] = [
   { key: "templates", title: "Templates" },
   { key: "sites", title: "Sites" },
   { key: "map", title: "Map" },
+  { key: "field", title: "Field" },
 ];
 
 interface ListRef {
@@ -78,6 +79,26 @@ interface SiteRow {
   listId: string | null;
   listName: string | null;
   dispatches: number;
+}
+interface DispatchRef {
+  id: string;
+  siteId: string;
+  siteName: string;
+  templateId: string;
+  templateName: string;
+  version: number;
+}
+interface ReportMeta {
+  id: string;
+  siteId: string;
+  siteName: string;
+  templateId: string;
+  templateName: string;
+  templateVersion: number;
+  byName: string;
+  performedAt: string;
+  submittedAt: string;
+  facts: number;
 }
 interface Dispatch {
   id: string;
@@ -444,6 +465,8 @@ export default function App() {
   const [section, setSection] = useState<Section>(() => SECTIONS.find((s) => s.key === recall("section"))?.key ?? "templates");
   const [openId, setOpenId] = useState<string | null>(null);
   const [openSite, setOpenSite] = useState<string | null>(null);
+  const [filling, setFilling] = useState<DispatchRef | null>(null);
+  const [openReport, setOpenReport] = useState<string | null>(null);
   const inviteToken = location.pathname.startsWith("/invite/")
     ? location.pathname.slice("/invite/".length)
     : null;
@@ -483,6 +506,8 @@ export default function App() {
     if (screen === "assistant") return <AssistantScreen enabled={me.assistant} onBack={() => setScreen("templates")} />;
     if (openId) return <Editor teamId={team.id} id={openId} onBack={() => setOpenId(null)} />;
     if (openSite) return <SiteEditor teamId={team.id} id={openSite} maps={me.maps} onBack={() => setOpenSite(null)} />;
+    if (filling) return <FillScreen teamId={team.id} dispatch={filling} onBack={() => setFilling(null)} />;
+    if (openReport) return <ReportScreen teamId={team.id} id={openReport} onBack={() => setOpenReport(null)} />;
     const head = (
       <HomeHeader
         team={team}
@@ -496,6 +521,7 @@ export default function App() {
     );
     if (section === "sites") return <Sites team={team} head={head} onOpen={setOpenSite} />;
     if (section === "map") return <MapScreen team={team} head={head} me={me} onOpen={setOpenSite} />;
+    if (section === "field") return <FieldScreen team={team} head={head} onFill={setFilling} onReport={setOpenReport} />;
     return <Home team={team} head={head} onOpen={setOpenId} />;
   };
 
@@ -1230,6 +1256,190 @@ function Members({
           ))}
         </section>
       )}
+    </div>
+  );
+}
+
+/**
+ * Field: what a crew can file — every template dispatched to a site — and what
+ * has been filed lately. Pick one, fill it, submit; the record goes to the vault.
+ */
+function FieldScreen({ team, head, onFill, onReport }: { team: TeamRef; head: React.ReactNode; onFill: (d: DispatchRef) => void; onReport: (id: string) => void }) {
+  const [dispatches, setDispatches] = useState<DispatchRef[] | null>(null);
+  const [reports, setReports] = useState<ReportMeta[]>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api<DispatchRef[]>(`/teams/${team.id}/dispatches`).then(setDispatches, (e) => setError(e.message));
+    api<ReportMeta[]>(`/teams/${team.id}/reports?limit=20`).then(setReports, () => setReports([]));
+  }, [team.id]);
+  const sites = [...new Map((dispatches ?? []).map((d) => [d.siteId, d.siteName])).entries()];
+  return (
+    <div className="shell">
+      {head}
+      {error && <p className="error">{error}</p>}
+      {sites.map(([siteId, siteName]) => (
+        <section key={siteId} className="group">
+          <div className="group-head"><span className="group-name">{siteName}</span></div>
+          {dispatches!.filter((d) => d.siteId === siteId).map((d) => (
+            <button key={d.id} className="card glass-frosted template-card" onClick={() => onFill(d)}>
+              <span className="template-text">
+                <span className="template-name">{d.templateName}</span>
+                <span className="template-meta">Fill and file</span>
+              </span>
+              <span className="version">v{d.version}</span>
+              <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+            </button>
+          ))}
+        </section>
+      ))}
+      {dispatches?.length === 0 && (
+        <div className="empty">
+          <p className="empty-title">Nothing to fill yet</p>
+          <p className="empty-hint">Dispatch a template to a site and it shows up here for the crew.</p>
+        </div>
+      )}
+      {reports.length > 0 && (
+        <section className="group">
+          <div className="group-head"><span className="group-name muted">Filed lately</span></div>
+          {reports.map((r) => (
+            <button key={r.id} className="card glass-frosted template-card" onClick={() => onReport(r.id)}>
+              <span className="template-text">
+                <span className="template-name">{r.templateName}</span>
+                <span className="template-meta">{r.siteName} · {ago(r.performedAt)} · {r.byName}</span>
+              </span>
+              <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+            </button>
+          ))}
+        </section>
+      )}
+    </div>
+  );
+}
+
+const localNow = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+
+/** Filling one dispatched template: every block of every task, values staged locally, one submit. */
+function FillScreen({ teamId, dispatch, onBack }: { teamId: string; dispatch: DispatchRef; onBack: () => void }) {
+  const [tpl, setTpl] = useState<Loaded | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [when, setWhen] = useState(localNow);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [filed, setFiled] = useState(false);
+  useEffect(() => {
+    api<Loaded>(`/teams/${teamId}/templates/${dispatch.templateId}`).then(setTpl, (e) => setError(e.message));
+  }, [teamId, dispatch.templateId]);
+  if (!tpl) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
+
+  const set = (id: string, v: string) => setValues((x) => (v === "" ? Object.fromEntries(Object.entries(x).filter(([k]) => k !== id)) : { ...x, [id]: v }));
+  const filledAny = Object.values(values).some((v) => v.trim() !== "");
+  const submit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/teams/${teamId}/reports`, {
+        method: "POST",
+        body: JSON.stringify({ dispatchId: dispatch.id, performedAt: new Date(when).toISOString(), values }),
+      });
+      setFiled(true);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+  const back = () => {
+    if (filledAny && !filed && !confirm("Leave without filing this?")) return;
+    onBack();
+  };
+
+  return (
+    <div className="shell editor">
+      <header className="editor-top">
+        <button className="icon-btn" onClick={back} aria-label="Back"><ChevronLeft /></button>
+        <div className="home-title">
+          <h1 className="site-title">{tpl.name}</h1>
+          <span className="team-name">{dispatch.siteName}</span>
+        </div>
+        <span className="version">v{tpl.version}</span>
+      </header>
+      {error && <p className="error">{error}</p>}
+      {tpl.tasks.map((task) => (
+        <section key={task.id} className="card glass-frosted task">
+          <p className="task-title">{task.name}</p>
+          {task.blocks.map((b) => (
+            <div key={b.id} className="block fill">
+              <p className="fill-label">{b.label}</p>
+              {b.kind === "photo" && <div className="photo-drop soon"><span className="lens" />Photos come next</div>}
+              {b.kind === "text" && (
+                <textarea className="text-input left note" rows={2} value={values[b.id] ?? ""} maxLength={4000} placeholder="Type here…"
+                  onChange={(e) => set(b.id, e.target.value)} aria-label={b.label} />
+              )}
+              {b.kind === "number" && (
+                <div className="number-row">
+                  <input className="text-input left" type="number" inputMode="decimal" step="any" value={values[b.id] ?? ""} placeholder="0"
+                    onChange={(e) => set(b.id, e.target.value)} aria-label={b.label} />
+                  {b.unit && <span className="unit-chip">{b.unit}</span>}
+                </div>
+              )}
+              {b.kind === "buttons" && (
+                <div className="key-grid" role="radiogroup" aria-label={b.label}>
+                  {b.options.map((o) => (
+                    <button key={o} className={`button-key press${values[b.id] === o ? " on" : ""}`} role="radio" aria-checked={values[b.id] === o}
+                      onClick={() => set(b.id, values[b.id] === o ? "" : o)}>{o}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </section>
+      ))}
+      <section className="card glass-frosted task">
+        <label className="field">
+          <span className="section-label">Done at</span>
+          <input className="text-input left" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} aria-label="Done at" />
+        </label>
+      </section>
+      <div className="dock">
+        <button className="big-btn primary" disabled={!filledAny || busy} onClick={submit}>{busy ? "Filing…" : "File report"}</button>
+      </div>
+      {filed && <Modal title="Filed" message={`${tpl.name} at ${dispatch.siteName} is in the vault.`} onClose={onBack} />}
+    </div>
+  );
+}
+
+/** One filed report, read back exactly as it was recorded. */
+function ReportScreen({ teamId, id, onBack }: { teamId: string; id: string; onBack: () => void }) {
+  const [report, setReport] = useState<(ReportMeta & { doc: { tasks: { id: string; name: string; blocks: { id: string; kind: BlockKind; label: string; unit: string; value: string | number }[] }[] } }) | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api<typeof report>(`/teams/${teamId}/reports/${id}`).then(setReport, (e) => setError(e.message));
+  }, [teamId, id]);
+  if (!report) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
+  return (
+    <div className="shell editor">
+      <header className="editor-top">
+        <button className="icon-btn" onClick={onBack} aria-label="Back"><ChevronLeft /></button>
+        <div className="home-title">
+          <h1 className="site-title">{report.templateName}</h1>
+          <span className="team-name">{report.siteName} · {new Date(report.performedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · {report.byName}</span>
+        </div>
+        <span className="version">v{report.templateVersion}</span>
+      </header>
+      {report.doc.tasks.map((task) => (
+        <section key={task.id} className="card glass-frosted task">
+          <p className="task-title">{task.name}</p>
+          {task.blocks.map((b) => (
+            <div key={b.id} className="block fill">
+              <p className="fill-label">{b.label}</p>
+              {b.kind === "buttons" ? (
+                <div className="key-grid"><span className="button-key press on static">{b.value}</span></div>
+              ) : (
+                <p className="report-value">{b.value}{b.unit ? <span className="unit-chip">{b.unit}</span> : null}</p>
+              )}
+            </div>
+          ))}
+        </section>
+      ))}
     </div>
   );
 }

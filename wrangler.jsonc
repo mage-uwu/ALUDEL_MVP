@@ -19,8 +19,16 @@
       "database_id": "d67a9e14-6c21-42eb-95c8-938f40e63563"
     }
   ],
-  // each user's chats: a SQLite-backed Durable Object per user
-  "durable_objects": { "bindings": [{ "name": "CHATS", "class_name": "ChatStore" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatStore"] }],
+  // SQLite-backed Durable Objects: each user's chats, and each team's vault of filed reports
+  "durable_objects": {
+    "bindings": [
+      { "name": "CHATS", "class_name": "ChatStore" },
+      { "name": "VAULT", "class_name": "Vault" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ChatStore"] },
+    { "tag": "v2", "new_sqlite_classes": ["Vault"] }
+  ],
   "observability": { "enabled": true }
 }

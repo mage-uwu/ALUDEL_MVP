@@ -4,6 +4,8 @@ import {
   EMAIL_RE,
   LIMITS,
   normalizePlace,
+  normalizeFilled,
+  normalizeQuery,
   normalizeTemplate,
   parsePlace,
   type AludelPlace,
@@ -12,6 +14,8 @@ import {
 import { applyPlan, configured, optimize, readInput } from "./optimize";
 import { ask, CHAT, storeFor, type ChatStore } from "./chat";
 export { ChatStore } from "./chat";
+import { vaultFor, type Vault } from "./vault";
+export { Vault } from "./vault";
 import {
   currentUser,
   finishLogin,
@@ -51,6 +55,8 @@ export interface Env {
   XAI_ENDPOINT?: string;
   /** Each user's chats, in that user's own Durable Object. */
   CHATS: DurableObjectNamespace<ChatStore>;
+  /** Each team's filed reports and their facts, in that team's own Durable Object. */
+  VAULT: DurableObjectNamespace<Vault>;
 }
 
 const HEADERS = {
@@ -525,6 +531,78 @@ async function teamRoutes(
       .bind(invite[1], teamId)
       .run();
     return json({ ok: true });
+  }
+
+  // ——— the field and the vault: what may be filed, filing it, and asking the stack ———
+  if (rest === "/dispatches" && req.method === "GET") {
+    const { results } = await env.DB.prepare(
+      `SELECT d.id, d.site_id AS siteId, s.client_name AS siteName, d.template_id AS templateId,
+              t.name AS templateName, t.version
+       FROM dispatches d JOIN sites s ON s.id = d.site_id JOIN templates t ON t.id = d.template_id
+       WHERE d.team_id = ? ORDER BY s.client_name, t.name`
+    )
+      .bind(teamId)
+      .all();
+    return json(results);
+  }
+  if (rest === "/reports" && req.method === "GET") {
+    const p = new URL(req.url).searchParams;
+    const filter: { site?: string; template?: string; limit: number } = {
+      limit: Math.min(100, Math.max(1, Number(p.get("limit")) || 20)),
+    };
+    if (p.get("site")?.match(UUID)) filter.site = p.get("site")!;
+    if (p.get("template")?.match(UUID)) filter.template = p.get("template")!;
+    return json(await vaultFor(env, teamId).list(filter));
+  }
+  if (rest === "/reports" && req.method === "POST") {
+    const body = await readBody(req);
+    const dispatchId = field(body?.dispatchId, 36);
+    const dispatch = await env.DB.prepare(
+      `SELECT d.id, d.site_id AS siteId, s.client_name AS siteName, t.id AS templateId, t.name AS templateName,
+              t.version AS templateVersion, t.doc
+       FROM dispatches d JOIN sites s ON s.id = d.site_id JOIN templates t ON t.id = d.template_id
+       WHERE d.id = ? AND d.team_id = ?`
+    )
+      .bind(dispatchId, teamId)
+      .first<{ id: string; siteId: string; siteName: string; templateId: string; templateName: string; templateVersion: number; doc: string }>();
+    if (!dispatch) return error(404, "Not found");
+    // the template as it stands is what the crew filled; the record names its version
+    const template = normalizeTemplate({ ...JSON.parse(dispatch.doc), name: dispatch.templateName })!;
+    const doc = normalizeFilled(template, body);
+    if (!doc) return error(422, "Nothing filled in");
+    const performed = typeof body?.performedAt === "string" ? Date.parse(body.performedAt) : Date.now();
+    if (Number.isNaN(performed) || performed > Date.now() + 3600_000 || performed < Date.now() - 5 * 365 * 86_400_000)
+      return error(422, "When was this done? Within the last five years, not in the future");
+    const bytes = new TextEncoder().encode(JSON.stringify(doc));
+    const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const meta = await vaultFor(env, teamId).add(
+      {
+        id: crypto.randomUUID(),
+        siteId: dispatch.siteId,
+        siteName: dispatch.siteName,
+        templateId: dispatch.templateId,
+        templateName: dispatch.templateName,
+        templateVersion: dispatch.templateVersion,
+        dispatchId: dispatch.id,
+        byUser: user.id,
+        byName: user.name || user.email,
+        performedAt: new Date(performed).toISOString(),
+        submittedAt: nowIso(),
+        hash,
+      },
+      doc
+    );
+    return json(meta, 201);
+  }
+  const report = rest.match(new RegExp(`^/reports/(${UUID})$`));
+  if (report && req.method === "GET") {
+    const found = await vaultFor(env, teamId).get(report[1]!);
+    return found ? json(found) : error(404, "Not found");
+  }
+  if (rest === "/vault/query" && req.method === "POST") {
+    const q = normalizeQuery(await readBody(req));
+    if (!q) return error(422, "Not a query: give where clauses and a select of rows or an aggregate");
+    return json(await vaultFor(env, teamId).query(q));
   }
 
   // ——— routes: the depot, the latest plan, a new plan, and applying it to lists ———
