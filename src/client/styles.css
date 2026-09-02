@@ -964,3 +964,13 @@ button.stop-row:active { background: rgba(255, 255, 255, 0.55); }
 .filter-input { min-height: 48px; padding-right: 48px; font-size: 15px; -webkit-appearance: none; appearance: none; }
 .filter-input::-webkit-search-cancel-button { display: none; }
 .filter-clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); }
+
+/* Aludel's face on an empty console: big enough to read as someone, not a prompt */
+.term-empty { padding-top: 34px; text-align: center; }
+.kaomoji {
+  margin: 0 0 14px;
+  color: #9fe8a8;
+  font: 600 48px/1 -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans CJK JP", "Noto Sans", sans-serif;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 24px rgba(159, 232, 168, 0.35);
+}
