@@ -99,6 +99,13 @@ interface ReportMeta {
   performedAt: string;
   submittedAt: string;
   facts: number;
+  origin: { file: string; page?: number; confidence?: number } | null;
+}
+interface TokenRef {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
 }
 interface Dispatch {
   id: string;
@@ -1123,6 +1130,10 @@ function Members({
   const [role, setRole] = useState<"member" | "admin">("member");
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
+  const [tokens, setTokens] = useState<TokenRef[]>([]);
+  const [tokenName, setTokenName] = useState("");
+  const [minted, setMinted] = useState("");
+  const [revoking, setRevoking] = useState<TokenRef | null>(null);
   const admin = team.role === "owner" || team.role === "admin";
   const onlyOwner = (m: Member) =>
     m.role === "owner" && (members ?? []).filter((x) => x.role === "owner").length <= 1;
@@ -1130,6 +1141,7 @@ function Members({
   const load = () => {
     api<Member[]>(`/teams/${team.id}/members`).then(setMembers, (e) => setError(e.message));
     if (admin) api<Invite[]>(`/teams/${team.id}/invites`).then(setInvites, () => setInvites([]));
+    if (admin) api<TokenRef[]>(`/teams/${team.id}/tokens`).then(setTokens, () => setTokens([]));
   };
   useEffect(load, [team.id]);
 
@@ -1142,6 +1154,17 @@ function Members({
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  const mint = guard(async () => {
+    const res = await api<{ token: string }>(`/teams/${team.id}/tokens`, { method: "POST", body: JSON.stringify({ name: tokenName }) });
+    setMinted(res.token);
+    setTokenName("");
+  });
+  const revoke = () => {
+    const t = revoking;
+    setRevoking(null);
+    if (t) guard(() => api(`/teams/${team.id}/tokens/${t.id}`, { method: "DELETE" }))();
   };
 
   const invite = guard(async () => {
@@ -1256,6 +1279,36 @@ function Members({
           ))}
         </section>
       )}
+
+      {admin && (
+        <section className="card glass-frosted invite-box">
+          <p className="section-label">Integrations</p>
+          <p className="template-meta">A token files reports and asks the vault as a member of this team. It is shown once.</p>
+          <div className="invite-row">
+            <input className="text-input left" value={tokenName} placeholder="Ingest sidecar" maxLength={60}
+              onChange={(e) => setTokenName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && tokenName.trim() && mint()} aria-label="Token name" />
+            <button className="big-btn" disabled={!tokenName.trim()} onClick={mint}>Create</button>
+          </div>
+          {minted && (
+            <div className="invite-link">
+              <p className="template-meta">Copy it now — it will not be shown again.</p>
+              <input className="text-input" readOnly value={minted} onFocus={(e) => e.target.select()} aria-label="New token" />
+            </div>
+          )}
+          {tokens.map((t) => (
+            <div key={t.id} className="pending">
+              <span className="template-text">
+                <span className="member-name">{t.name}</span>
+                <span className="template-meta">{t.lastUsedAt ? `used ${ago(t.lastUsedAt)}` : `made ${ago(t.createdAt)}, never used`}</span>
+              </span>
+              <button className="icon-btn danger" aria-label={`Revoke ${t.name}`} onClick={() => setRevoking(t)}><X /></button>
+            </div>
+          ))}
+        </section>
+      )}
+      {revoking && (
+        <Modal title={`Revoke “${revoking.name}”?`} message="Anything still using it stops working at once." action={{ label: "Revoke", onClick: revoke }} onClose={() => setRevoking(null)} />
+      )}
     </div>
   );
 }
@@ -1305,7 +1358,7 @@ function FieldScreen({ team, head, onFill, onReport }: { team: TeamRef; head: Re
             <button key={r.id} className="card glass-frosted template-card" onClick={() => onReport(r.id)}>
               <span className="template-text">
                 <span className="template-name">{r.templateName}</span>
-                <span className="template-meta">{r.siteName} · {ago(r.performedAt)} · {r.byName}</span>
+                <span className="template-meta">{r.siteName} · {ago(r.performedAt)} · {r.byName}{r.origin ? " · imported" : ""}</span>
               </span>
               <span className="chevron" aria-hidden="true"><ChevronRight /></span>
             </button>
@@ -1421,7 +1474,10 @@ function ReportScreen({ teamId, id, onBack }: { teamId: string; id: string; onBa
         <button className="icon-btn" onClick={onBack} aria-label="Back"><ChevronLeft /></button>
         <div className="home-title">
           <h1 className="site-title">{report.templateName}</h1>
-          <span className="team-name">{report.siteName} · {new Date(report.performedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · {report.byName}</span>
+          <span className="team-name">
+            {report.siteName} · {new Date(report.performedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · {report.byName}
+            {report.origin ? ` · from ${report.origin.file}${report.origin.page ? ` p.${report.origin.page}` : ""}` : ""}
+          </span>
         </div>
         <span className="version">v{report.templateVersion}</span>
       </header>

@@ -56,6 +56,16 @@ const TABLES = [
      accepted_at TEXT,
      accepted_by TEXT
    )`,
+  // id is the SHA-256 of an integration token; the raw token is shown once, never stored
+  `CREATE TABLE IF NOT EXISTS tokens (
+     id TEXT PRIMARY KEY,
+     team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+     name TEXT NOT NULL,
+     created_by TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     last_used_at TEXT,
+     revoked_at TEXT
+   )`,
   // lists are containers of worksites; a site may sit in at most one
   `CREATE TABLE IF NOT EXISTS lists (
      id TEXT PRIMARY KEY,
@@ -106,6 +116,7 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_invites_team ON invites(team_id)`,
   `CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(email)`,
+  `CREATE INDEX IF NOT EXISTS idx_tokens_team ON tokens(team_id)`,
   `CREATE INDEX IF NOT EXISTS idx_templates_team ON templates(team_id, updated_at DESC)`,
 ];
 

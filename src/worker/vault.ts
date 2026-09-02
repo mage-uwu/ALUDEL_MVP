@@ -4,7 +4,7 @@
 // filled block also becomes one typed fact row, which is what queries run
 // over — a labelled block is a series across the whole stack.
 import { DurableObject } from "cloudflare:workers";
-import { QUERY_LIMITS, type BlockKind, type Filled, type VaultQuery } from "../shared/model";
+import { QUERY_LIMITS, type BlockKind, type Filled, type Origin, type VaultQuery } from "../shared/model";
 import type { Env } from "./index";
 
 export type ReportMeta = {
@@ -21,8 +21,12 @@ export type ReportMeta = {
   submittedAt: string;
   hash: string;
   facts: number;
+  /** Null for a report filed in the field; the source document for an import. */
+  origin: Origin | null;
 };
 export type Report = ReportMeta & { doc: Filled };
+type Row = Omit<ReportMeta, "origin"> & { origin: string | null };
+const withOrigin = (r: Row): ReportMeta => ({ ...r, origin: r.origin ? (JSON.parse(r.origin) as Origin) : null });
 export type Fact = {
   seq: number;
   taskId: string;
@@ -56,7 +60,7 @@ export function factsOf(doc: Filled): Fact[] {
 
 const META = `r.id, r.site_id AS siteId, r.site_name AS siteName, r.template_id AS templateId, r.template_name AS templateName,
   r.template_version AS templateVersion, r.dispatch_id AS dispatchId, r.by_user AS byUser, r.by_name AS byName,
-  r.performed_at AS performedAt, r.submitted_at AS submittedAt, r.hash, r.facts`;
+  r.performed_at AS performedAt, r.submitted_at AS submittedAt, r.hash, r.facts, r.origin`;
 
 const like = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
@@ -124,7 +128,7 @@ export class Vault extends DurableObject<Env> {
         template_id TEXT NOT NULL, template_name TEXT NOT NULL, template_version INTEGER NOT NULL,
         dispatch_id TEXT NOT NULL, by_user TEXT NOT NULL, by_name TEXT NOT NULL,
         performed_at TEXT NOT NULL, submitted_at TEXT NOT NULL, hash TEXT NOT NULL, facts INTEGER NOT NULL,
-        doc TEXT NOT NULL
+        doc TEXT NOT NULL, origin TEXT, origin_key TEXT
       );
       CREATE INDEX IF NOT EXISTS reports_site ON reports(site_id, performed_at);
       CREATE INDEX IF NOT EXISTS reports_template ON reports(template_id, performed_at);
@@ -140,18 +144,33 @@ export class Vault extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS facts_label ON facts(label, kind, performed_at);
       CREATE INDEX IF NOT EXISTS facts_site ON facts(site_id, performed_at);
     `);
+    // vaults made before provenance existed still need the columns
+    for (const sql of ["ALTER TABLE reports ADD COLUMN origin TEXT", "ALTER TABLE reports ADD COLUMN origin_key TEXT"]) {
+      try {
+        this.sql.exec(sql);
+      } catch {
+        /* already there */
+      }
+    }
+    this.sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS reports_origin ON reports(origin_key)");
+  }
+
+  /** The report already filed from this document, if any. */
+  byOrigin(key: string): string | null {
+    return this.sql.exec<{ id: string }>("SELECT id FROM reports WHERE origin_key = ?", key).toArray()[0]?.id ?? null;
   }
 
   /** Append a report and its facts, all or nothing. */
-  add(meta: Omit<ReportMeta, "facts">, doc: Filled): ReportMeta {
+  add(meta: Omit<ReportMeta, "facts">, doc: Filled, originKey: string | null = null): ReportMeta {
     const facts = factsOf(doc);
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(
         `INSERT INTO reports (id, site_id, site_name, template_id, template_name, template_version, dispatch_id, by_user, by_name,
-                              performed_at, submitted_at, hash, facts, doc)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                              performed_at, submitted_at, hash, facts, doc, origin, origin_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         meta.id, meta.siteId, meta.siteName, meta.templateId, meta.templateName, meta.templateVersion, meta.dispatchId,
-        meta.byUser, meta.byName, meta.performedAt, meta.submittedAt, meta.hash, facts.length, JSON.stringify(doc)
+        meta.byUser, meta.byName, meta.performedAt, meta.submittedAt, meta.hash, facts.length, JSON.stringify(doc),
+        meta.origin ? JSON.stringify(meta.origin) : null, originKey
       );
       for (const f of facts)
         this.sql.exec(
@@ -168,17 +187,17 @@ export class Vault extends DurableObject<Env> {
     if (filter.site) q.site = filter.site;
     if (filter.template) q.template = filter.template;
     const { sql, params } = compile(q);
-    return this.sql.exec<ReportMeta>(sql, ...params).toArray();
+    return this.sql.exec<Row>(sql, ...params).toArray().map(withOrigin);
   }
 
   get(id: string): Report | null {
-    const row = this.sql.exec<ReportMeta & { doc: string }>(`SELECT ${META}, r.doc FROM reports r WHERE r.id = ?`, id).toArray()[0];
-    return row ? { ...row, doc: JSON.parse(row.doc) as Filled } : null;
+    const row = this.sql.exec<Row & { doc: string }>(`SELECT ${META}, r.doc FROM reports r WHERE r.id = ?`, id).toArray()[0];
+    return row ? { ...withOrigin(row), doc: JSON.parse(row.doc) as Filled } : null;
   }
 
   query(q: VaultQuery): { rows: ReportMeta[] } | { groups: { key: string; name: string; value: number | null; n: number }[] } {
     const { sql, params } = compile(q);
-    if ("rows" in q.select) return { rows: this.sql.exec<ReportMeta>(sql, ...params).toArray() };
+    if ("rows" in q.select) return { rows: this.sql.exec<Row>(sql, ...params).toArray().map(withOrigin) };
     return { groups: this.sql.exec<{ key: string; name: string; value: number | null; n: number }>(sql, ...params).toArray() };
   }
 }

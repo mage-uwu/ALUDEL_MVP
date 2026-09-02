@@ -5,7 +5,9 @@ import {
   LIMITS,
   normalizePlace,
   normalizeFilled,
+  normalizeOrigin,
   normalizeQuery,
+  originKey,
   normalizeTemplate,
   parsePlace,
   type AludelPlace,
@@ -137,9 +139,11 @@ async function teamRoutes(
   env: Env,
   user: User,
   teamId: string,
-  rest: string
+  rest: string,
+  /** An integration token: a member of exactly this team, proven before we get here. */
+  asMember = false
 ): Promise<Response> {
-  const role = await requireMember(env, user, teamId);
+  const role = asMember ? "member" : await requireMember(env, user, teamId);
   // an unknown team and a team you don't belong to are indistinguishable
   if (!role) return error(404, "Not found");
   const admin = role === "owner" || role === "admin";
@@ -533,6 +537,122 @@ async function teamRoutes(
     return json({ ok: true });
   }
 
+  // ——— integration tokens: a sidecar files and asks as a member of this team ———
+  if (rest === "/tokens") {
+    if (!admin) return error(403, "Admins only");
+    if (req.method === "GET") {
+      const { results } = await env.DB.prepare(
+        `SELECT id, name, created_at AS createdAt, last_used_at AS lastUsedAt FROM tokens
+         WHERE team_id = ? AND revoked_at IS NULL ORDER BY created_at DESC`
+      )
+        .bind(teamId)
+        .all();
+      return json(results);
+    }
+    if (req.method === "POST") {
+      const name = field((await readBody(req))?.name, 60) || "Integration";
+      const raw = randomToken();
+      const id = await hashToken(raw);
+      await env.DB.prepare("INSERT INTO tokens (id, team_id, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(id, teamId, name, user.id, nowIso())
+        .run();
+      // the raw token exists only in this response; the row keeps its hash
+      return json({ id, name, token: `aludel_${raw}` }, 201);
+    }
+    return error(405, "Method not allowed");
+  }
+  const tokenRef = rest.match(/^\/tokens\/([A-Za-z0-9_-]{43})$/);
+  if (tokenRef && req.method === "DELETE") {
+    if (!admin) return error(403, "Admins only");
+    const res = await env.DB.prepare("UPDATE tokens SET revoked_at = ? WHERE id = ? AND team_id = ? AND revoked_at IS NULL")
+      .bind(nowIso(), tokenRef[1], teamId)
+      .run();
+    return res.meta.changes ? json({ ok: true }) : error(404, "Not found");
+  }
+
+  // ——— import: old documents, already read into records, filed like field work ———
+  if (rest === "/import" && req.method === "POST") {
+    const body = await readBody(req);
+    const records = Array.isArray(body?.records) ? body.records.slice(0, 200) : [];
+    if (!records.length) return error(422, "records: 1–200 of them");
+    const vault = vaultFor(env, teamId);
+    const results: { index: number; id?: string; duplicate?: true; error?: string }[] = [];
+    for (const [index, raw] of records.entries()) {
+      const rec = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+      const fail = (error: string) => results.push({ index, error });
+      const origin = normalizeOrigin(rec.origin);
+      if (!origin) {
+        fail("origin.file required");
+        continue;
+      }
+      const key = originKey(origin);
+      const seen = key ? await vault.byOrigin(key) : null;
+      if (seen) {
+        results.push({ index, id: seen, duplicate: true });
+        continue;
+      }
+      const site = await env.DB.prepare("SELECT id, client_name AS name FROM sites WHERE id = ? AND team_id = ?")
+        .bind(field(rec.siteId, 36), teamId)
+        .first<{ id: string; name: string }>();
+      if (!site) {
+        fail("Unknown site");
+        continue;
+      }
+      const tpl = await env.DB.prepare("SELECT id, name, version, doc FROM templates WHERE id = ? AND team_id = ?")
+        .bind(field(rec.templateId, 36), teamId)
+        .first<{ id: string; name: string; version: number; doc: string }>();
+      if (!tpl) {
+        fail("Unknown template");
+        continue;
+      }
+      const doc = normalizeFilled(normalizeTemplate({ ...JSON.parse(tpl.doc), name: tpl.name })!, rec);
+      if (!doc) {
+        fail("Nothing filled in");
+        continue;
+      }
+      const performed = typeof rec.performedAt === "string" ? Date.parse(rec.performedAt) : NaN;
+      if (Number.isNaN(performed) || performed > Date.now() + 3600_000) {
+        fail("performedAt: a past date");
+        continue;
+      }
+      // the record files against a dispatch, made on the spot when this site was never dispatched in the app
+      let dispatch = await env.DB.prepare("SELECT id FROM dispatches WHERE site_id = ? AND template_id = ?")
+        .bind(site.id, tpl.id)
+        .first<{ id: string }>();
+      if (!dispatch) {
+        dispatch = { id: crypto.randomUUID() };
+        await env.DB.prepare(
+          `INSERT INTO dispatches (id, team_id, site_id, template_id, template_version, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+          .bind(dispatch.id, teamId, site.id, tpl.id, tpl.version, user.id, nowIso())
+          .run();
+      }
+      const bytes = new TextEncoder().encode(JSON.stringify(doc));
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const added = await vault.add(
+        {
+          id: crypto.randomUUID(),
+          siteId: site.id,
+          siteName: site.name,
+          templateId: tpl.id,
+          templateName: tpl.name,
+          templateVersion: tpl.version,
+          dispatchId: dispatch.id,
+          byUser: user.id,
+          byName: field(rec.byName, 80) || user.name,
+          performedAt: new Date(performed).toISOString(),
+          submittedAt: nowIso(),
+          hash,
+          origin,
+        },
+        doc,
+        key
+      );
+      results.push({ index, id: added.id });
+    }
+    return json({ filed: results.filter((r) => r.id && !r.duplicate).length, results });
+  }
+
   // ——— the field and the vault: what may be filed, filing it, and asking the stack ———
   if (rest === "/dispatches" && req.method === "GET") {
     const { results } = await env.DB.prepare(
@@ -589,6 +709,7 @@ async function teamRoutes(
         performedAt: new Date(performed).toISOString(),
         submittedAt: nowIso(),
         hash,
+        origin: null,
       },
       doc
     );
@@ -646,9 +767,28 @@ async function teamRoutes(
   return error(404, "Not found");
 }
 
+const BEARER = /^Bearer\s+aludel_([A-Za-z0-9_-]{43})$/;
+
+/** An integration token, if the request carries one: a member of one team, and no one anywhere else. */
+async function tokenPrincipal(req: Request, env: Env): Promise<{ user: User; teamId: string } | null> {
+  const m = req.headers.get("authorization")?.match(BEARER);
+  if (!m) return null;
+  const id = await hashToken(m[1]!);
+  const row = await env.DB.prepare("SELECT id, team_id AS teamId, name, last_used_at AS lastUsed FROM tokens WHERE id = ? AND revoked_at IS NULL")
+    .bind(id)
+    .first<{ id: string; teamId: string; name: string; lastUsed: string | null }>();
+  if (!row) return null;
+  if (!row.lastUsed || Date.parse(row.lastUsed) < Date.now() - 3600_000)
+    await env.DB.prepare("UPDATE tokens SET last_used_at = ? WHERE id = ?").bind(nowIso(), id).run();
+  return { teamId: row.teamId, user: { id: `token:${row.id.slice(0, 12)}`, email: `${row.name}@integration`, name: row.name, picture: "" } };
+}
+
 async function api(req: Request, env: Env, path: string): Promise<Response> {
-  const user = await currentUser(req, env);
+  const token = await tokenPrincipal(req, env);
+  const user = token?.user ?? (await currentUser(req, env));
   if (!user) return error(401, "Sign in required");
+  // a token reaches its own team's routes and nothing else: no /me, no chats, no other team
+  if (token && !path.startsWith(`/teams/${token.teamId}/`)) return error(404, "Not found");
 
   if (path === "/me" && req.method === "GET") {
     const { results } = await env.DB.prepare(
@@ -760,7 +900,7 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   }
 
   const scoped = path.match(new RegExp(`^/teams/(${UUID})(.*)$`));
-  if (scoped) return teamRoutes(req, env, user, scoped[1]!, scoped[2] ?? "");
+  if (scoped) return teamRoutes(req, env, user, scoped[1]!, scoped[2] ?? "", token !== null);
 
   return error(404, "Not found");
 }
@@ -780,7 +920,9 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/")) {
-        if (!sameOrigin(req, env)) return error(403, "Cross-origin request refused");
+        // the Origin check guards cookies; a bearer token is never sent by a browser on someone's behalf
+        const bearer = BEARER.test(req.headers.get("authorization") ?? "");
+        if (!bearer && !sameOrigin(req, env)) return error(403, "Cross-origin request refused");
         return await api(req, env, url.pathname.slice(4));
       }
 

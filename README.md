@@ -81,6 +81,45 @@ template, while `label` reaps every block whose label contains the word, across 
 but different, until you filter by template. The shape compiles to parameterised SQL inside the
 team's object, so it cannot be injected and cannot cross teams; it is the tool an agent gets.
 
+### Importing old documents
+
+A sidecar that reads old paperwork files it into the same vault through the same gate, so an
+imported report is queryable exactly like one filed from a phone. It authenticates with an
+**integration token** (Members → Integrations; shown once, stored hashed, revocable) which acts as a
+*member* of one team and nothing else: no `/me`, no chats, no other team, no admin routes.
+
+```
+POST /api/teams/<team id>/import
+Authorization: Bearer aludel_<token>
+Content-Type: application/json
+```
+
+```jsonc
+{ "records": [                                   // 1–200 per call
+  { "siteId": "<uuid>",                          // an existing site of the team (resolve addresses before you get here)
+    "templateId": "<uuid>",                      // an existing template; create it first via POST /templates + PUT if the TM minted a new proto-type
+    "performedAt": "2024-01-17T14:00:00Z",       // when the work was done, ISO 8601, in the past
+    "byName": "R. Ortiz",                        // optional: the technician named on the document; else the token's name
+    "values": {                                  // block id → value, keyed by the template's block ids (GET /templates/:id)
+      "<block id>": 38.5,                        // number blocks: a number (or a numeric string)
+      "<block id>": "FAIL",                      // buttons blocks: exactly one of the block's options
+      "<block id>": "Leak at the valve"          // text blocks: text, ≤ 4000 chars
+    },                                           // photo blocks, unknown ids and wrong kinds are dropped; nothing filled → error
+    "origin": {                                  // provenance — required
+      "file": "2024-jan.pdf",                    // required
+      "sha256": "<64 hex>",                      // recommended: with page, makes the record idempotent
+      "page": 3,
+      "confidence": 0.93,                        // 0–1, the classifier's confidence
+      "externalId": "doc-8812"                   // optional: your own id; wins over sha256+page as the idempotency key
+    } } ] }
+```
+
+Response: `{ "filed": n, "results": [{ "index", "id" } | { "index", "id", "duplicate": true } | { "index", "error" }] }`,
+one entry per record in order. A record whose `externalId`, or `sha256` + `page`, was filed before
+comes back as a duplicate with the earlier id, so re-running a batch never files twice. A dispatch
+for the site and template is made on the spot if the app never dispatched it. Imported reports carry
+their `origin` and show as *imported* in Field.
+
 ## Auth and tenancy
 
 Sign-in is Google OAuth (authorization code + PKCE, with `state` and `nonce`), and every

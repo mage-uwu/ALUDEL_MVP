@@ -388,3 +388,33 @@ export function normalizeQuery(input: unknown): VaultQuery | null {
   if (to) out.to = to;
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Provenance. A report filed from a phone has none; a report imported from an
+// old document says which file, which page, and how sure the classifier was.
+// The key makes a re-run idempotent: the same page never files twice.
+
+export interface Origin {
+  file: string;
+  sha256?: string;
+  page?: number;
+  confidence?: number;
+  externalId?: string;
+}
+
+export function normalizeOrigin(v: unknown): Origin | null {
+  const o = rec(v);
+  const file = str(o.file, 200, "");
+  if (!file) return null;
+  const out: Origin = { file };
+  if (typeof o.sha256 === "string" && /^[0-9a-f]{64}$/i.test(o.sha256)) out.sha256 = o.sha256.toLowerCase();
+  if (typeof o.page === "number" && Number.isInteger(o.page) && o.page >= 1) out.page = o.page;
+  if (typeof o.confidence === "number" && o.confidence >= 0 && o.confidence <= 1) out.confidence = o.confidence;
+  const externalId = str(o.externalId, 120, "");
+  if (externalId) out.externalId = externalId;
+  return out;
+}
+
+/** What makes two imports the same document: an external id, else the file hash and page. */
+export const originKey = (o: Origin): string | null =>
+  o.externalId ? `id:${o.externalId}` : o.sha256 ? `sha:${o.sha256}#${o.page ?? 0}` : null;
