@@ -166,7 +166,7 @@ const setTurns = (turns: Turn[]) => {
 
 // Aludel's face while the conversation is empty: it blinks now and then, and every third time it winks.
 // Each glyph sits in a fixed slot and moods crossfade, so the face never jumps.
-const FACE = { idle: "(≧◡≦)", blink: "(^◡^)", wink: "(≧◡^)" };
+const FACE = { idle: "(≧◡≦)", blink: "(-_-)", wink: "(^◡-)", wink2: "(-◡^)" };
 const Face = ({ of, hidden }: { of: string; hidden: boolean }) => (
   <span className={`face${hidden ? " out" : ""}`}>{[...of].map((g, i) => <span key={i} className="g">{g}</span>)}</span>
 );
@@ -197,7 +197,7 @@ function Chat({ enabled }: { enabled: boolean }) {
     let n = 0;
     let back = 0;
     const tick = setInterval(() => {
-      setMood(++n % 3 ? "blink" : "wink");
+      setMood(++n % 3 ? "blink" : n % 2 ? "wink" : "wink2");
       back = window.setTimeout(() => setMood("idle"), n % 3 ? 220 : 520);
     }, 3400);
     return () => {
