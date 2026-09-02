@@ -594,7 +594,16 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
     const turns = readTurns((await readBody(req))?.turns);
     if (!turns) return error(422, "A conversation of up to 20 turns, ending with you");
     try {
-      return json({ reply: await ask(env, `aludel-${user.id}`, turns) });
+      // an explicit identity encoding keeps the runtime from gzipping the stream, which would hold it
+      // until the end; no-transform asks every hop in between for the same
+      return new Response(await ask(env, `aludel-${user.id}`, turns), {
+        headers: {
+          ...HEADERS,
+          "content-type": "text/plain; charset=utf-8",
+          "content-encoding": "identity",
+          "cache-control": "no-store, no-transform",
+        },
+      });
     } catch (e) {
       return error(502, (e as Error).message);
     }

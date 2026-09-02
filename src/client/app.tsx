@@ -215,8 +215,21 @@ function Chat({ enabled }: { enabled: boolean }) {
     setBusy(true);
     setError("");
     try {
-      const { reply } = await api<{ reply: string }>("/chat", { method: "POST", body: JSON.stringify({ turns }) });
-      setTurns([...turns, { role: "assistant", content: reply }]);
+      // the reply streams in as plain text; the last turn grows with it
+      const res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ turns }) });
+      if (res.status === 401) throw new Unauthorized("Sign in required");
+      if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      setTurns([...turns, { role: "assistant", content: "" }]);
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+        setTurns([...turns, { role: "assistant", content: text }]);
+      }
+      if (!text.trim()) throw new Error("The assistant returned nothing");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -235,22 +248,16 @@ function Chat({ enabled }: { enabled: boolean }) {
             </p>
           </div>
         )}
-        {/* the face travels: it heads Aludel's latest line, or the pending one while it thinks */}
+        {/* the face is the cursor: it rides the end of Aludel's latest line as the text streams in, and stays there */}
         {chat.turns.map((t, i) =>
           t.role === "user" ? (
             <div key={i} className="term-line you">{`$ ${t.content}`}</div>
           ) : (
             <div key={i} className="term-doc said">
-              {!busy && i === chat.turns.length - 1 && <Kaomoji mood={mood} small />}
               <span>{t.content}</span>
+              {i === chat.turns.length - 1 && <Kaomoji mood={mood} small />}
             </div>
           )
-        )}
-        {busy && (
-          <div className="term-doc said">
-            <Kaomoji mood={mood} small />
-            <span className="term-line">…</span>
-          </div>
         )}
         {error && <div className="term-line err">{error}</div>}
       </div>

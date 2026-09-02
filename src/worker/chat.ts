@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 // The assistant: one chat turn with xAI Grok. The key never leaves the Worker;
-// the client sends the conversation so far and gets plain text back.
+// the client sends the conversation so far and gets plain text back, streamed
+// as it is written.
 import type { Env } from "./index";
 
 const MODEL = "grok-4.6";
@@ -24,8 +25,8 @@ export function readTurns(v: unknown): Turn[] | null {
   return turns[turns.length - 1]!.role === "user" ? turns : null;
 }
 
-/** One completion; plain text back, or an error with a readable message. */
-export async function ask(env: Env, convId: string, turns: Turn[]): Promise<string> {
+/** One completion as a stream of plain-text chunks, or an error with a readable message. */
+export async function ask(env: Env, convId: string, turns: Turn[]): Promise<ReadableStream<Uint8Array>> {
   const res = await fetch(`${env.XAI_ENDPOINT ?? XAI}/chat/completions`, {
     method: "POST",
     headers: {
@@ -38,7 +39,7 @@ export async function ask(env: Env, convId: string, turns: Turn[]): Promise<stri
       model: MODEL,
       messages: [{ role: "system", content: SYSTEM }, ...turns],
       reasoning_effort: "low",
-      stream: false,
+      stream: true,
     }),
     signal: AbortSignal.timeout(90_000),
   });
@@ -47,8 +48,28 @@ export async function ask(env: Env, convId: string, turns: Turn[]): Promise<stri
     const msg = typeof detail?.error === "string" ? detail.error : detail?.error?.message;
     throw new Error(msg ?? `The assistant is unavailable (${res.status})`);
   }
-  const data = await res.json<{ choices?: { message?: { content?: string } }[] }>();
-  const reply = data.choices?.[0]?.message?.content?.trim();
-  if (!reply) throw new Error("The assistant returned nothing");
-  return reply;
+  // server-sent events in, bare text out: each delta's content, nothing else
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+  return res.body!.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, out) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === "[DONE]") continue;
+          try {
+            const text = (JSON.parse(data) as { choices?: { delta?: { content?: string } }[] }).choices?.[0]?.delta?.content;
+            if (text) out.enqueue(encoder.encode(text));
+          } catch {
+            /* a partial or foreign line: skip it */
+          }
+        }
+      },
+    })
+  );
 }
