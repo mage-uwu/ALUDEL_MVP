@@ -122,6 +122,23 @@ comes back as a duplicate with the earlier id, so re-running a batch never files
 for the site and template is made on the spot if the app never dispatched it. Imported reports carry
 their `origin` and show as *imported* in Field.
 
+**From the sidecar's graph export.** `tools/import-graph.mjs` reads the sidecar's graph
+(record → fact → block → template, plus site and employee; classifier nodes are ignored) and
+files it through the gate above. Zero dependencies, Node 18+:
+
+```
+node tools/import-graph.mjs graph.json --team <id> --token aludel_… --base https://<host> [--dry]
+```
+
+`--dry` prints the plan and writes nothing. Otherwise a template the map file has never seen is
+created from its blocks, with each block's kind inferred from every value the corpus filed under it
+(all numeric → number; a closed set of 2–6 short keys → buttons with those keys; image filenames →
+photo; the same paragraph on every record → left on the form, not filed), a site is created from
+its address with the address as the location note and the place left for the picker, and both are
+remembered in `aludel-map.json` so a rerun reuses them. A record's `performedAt` is its date of
+service and time of service in the shop's zone (`--tz`, default America/New_York), and its
+identity is the sidecar's `reportId`, so a rerun never files twice.
+
 ## Auth and tenancy
 
 Sign-in is Google OAuth (authorization code + PKCE, with `state` and `nonce`), and every
