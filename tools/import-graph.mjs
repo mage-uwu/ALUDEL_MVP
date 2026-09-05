@@ -176,7 +176,7 @@ const performedAt = (rec) => {
   const date = clean(props(byLabel(rec, "date_of_service")).value);
   const time = clean(props(byLabel(rec, "time_of_service") ?? byLabel(rec, "start_time")).value);
   const submitted = clean(props(byLabel(rec, "submitted_on")).value);
-  const us = /^(\d{2})-(\d{2})-(\d{4})(?:\s+(.+))?$/;
+  const us = /^(\d{1,2})-(\d{1,2})-(\d{4})(?:\s+(.+))?$/;
   let m = us.exec(date ?? "");
   if (m) {
     const [h, mi] = clock(time) ?? clock(m[4]) ?? [12, 0];
@@ -231,14 +231,19 @@ for (const s of skipped) console.log(`skip ${s.id}: ${s.reason}`);
 console.log(`${payload.length} records ready${skipped.length ? `, ${skipped.length} skipped` : ""}`);
 if (dry) process.exit(0);
 
+// the gate takes 200 records and 128 KB a call; a batch is whichever fills first
+const BATCH = 200, BYTES = 120 * 1024;
 let filed = 0, duplicate = 0, failed = 0;
-for (let i = 0; i < payload.length; i += 200) {
-  const { results } = await api("/import", { method: "POST", body: JSON.stringify({ records: payload.slice(i, i + 200) }) });
+for (let i = 0; i < payload.length; ) {
+  let j = i, size = 0;
+  while (j < payload.length && j - i < BATCH && (j === i || size + JSON.stringify(payload[j]).length < BYTES)) size += JSON.stringify(payload[j++]).length;
+  const { results } = await api("/import", { method: "POST", body: JSON.stringify({ records: payload.slice(i, j) }) });
   for (const r of results) {
     if (r.error) (failed++, console.log(`  ! ${payload[i + r.index].origin.externalId}: ${r.error}`));
     else if (r.duplicate) duplicate++;
     else filed++;
   }
+  i = j;
 }
 console.log(`filed ${filed}, already there ${duplicate}, failed ${failed}`);
 process.exit(failed ? 1 : 0);

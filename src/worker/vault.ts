@@ -105,7 +105,8 @@ export function compile(q: VaultQuery): { sql: string; params: (string | number)
     : s.groupBy === "template" ? "r.template_id AS key, r.template_name AS name"
     : s.groupBy === "month" ? "substr(r.performed_at, 1, 7) AS key, substr(r.performed_at, 1, 7) AS name"
     : "'all' AS key, 'all' AS name";
-  const value = s.agg === "count" && !measure.length ? "COUNT(DISTINCT r.id)" : `${s.agg.toUpperCase()}(m.num)`;
+  // count is of reports, or of the measured facts when there is a measure; the rest measure numbers
+  const value = s.agg === "count" ? (measure.length ? "COUNT(*)" : "COUNT(DISTINCT r.id)") : `${s.agg.toUpperCase()}(m.num)`;
   const from = measure.length || s.agg !== "count" ? `facts m JOIN reports r ON r.id = m.report_id` : `reports r`;
   const mconds = measure.length ? ` AND ${measure.join(" AND ")}` : s.agg !== "count" ? " AND m.num IS NOT NULL" : "";
   params.push(QUERY_LIMITS.groups);

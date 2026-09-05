@@ -12,6 +12,7 @@ import {
   parsePlace,
   type AludelPlace,
   type Role,
+  type Template,
 } from "../shared/model";
 import { applyPlan, configured, optimize, readInput } from "./optimize";
 import { ask, CHAT, storeFor, type ChatStore } from "./chat";
@@ -591,6 +592,25 @@ async function teamRoutes(
     if (!records.length) return error(422, "records: 1–200 of them");
     const vault = vaultFor(env, teamId);
     const results: { index: number; id?: string; duplicate?: true; error?: string }[] = [];
+    // a batch is mostly one form at a few sites: look each up once
+    type SiteRow = { id: string; name: string };
+    type TplRow = { id: string; name: string; version: number; doc: string; template: Template };
+    const sites = new Map<string, Promise<SiteRow | null>>();
+    const templates = new Map<string, Promise<TplRow | null>>();
+    const siteOf = (id: string) =>
+      sites.get(id) ??
+      sites.set(id, env.DB.prepare("SELECT id, client_name AS name FROM sites WHERE id = ? AND team_id = ?").bind(id, teamId).first<SiteRow>()).get(id)!;
+    const templateOf = (id: string) =>
+      templates.get(id) ??
+      templates
+        .set(
+          id,
+          env.DB.prepare("SELECT id, name, version, doc FROM templates WHERE id = ? AND team_id = ?")
+            .bind(id, teamId)
+            .first<Omit<TplRow, "template">>()
+            .then((t) => t && { ...t, template: normalizeTemplate({ ...JSON.parse(t.doc), name: t.name })! })
+        )
+        .get(id)!;
     for (const [index, raw] of records.entries()) {
       const rec = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
       const fail = (error: string) => results.push({ index, error });
@@ -605,27 +625,24 @@ async function teamRoutes(
         results.push({ index, id: seen, duplicate: true });
         continue;
       }
-      const site = await env.DB.prepare("SELECT id, client_name AS name FROM sites WHERE id = ? AND team_id = ?")
-        .bind(field(rec.siteId, 36), teamId)
-        .first<{ id: string; name: string }>();
+      const site = await siteOf(field(rec.siteId, 36));
       if (!site) {
         fail("Unknown site");
         continue;
       }
-      const tpl = await env.DB.prepare("SELECT id, name, version, doc FROM templates WHERE id = ? AND team_id = ?")
-        .bind(field(rec.templateId, 36), teamId)
-        .first<{ id: string; name: string; version: number; doc: string }>();
+      const tpl = await templateOf(field(rec.templateId, 36));
       if (!tpl) {
         fail("Unknown template");
         continue;
       }
-      const doc = normalizeFilled(normalizeTemplate({ ...JSON.parse(tpl.doc), name: tpl.name })!, rec);
+      const doc = normalizeFilled(tpl.template, rec);
       if (!doc) {
         fail("Nothing filled in");
         continue;
       }
       const performed = typeof rec.performedAt === "string" ? Date.parse(rec.performedAt) : NaN;
-      if (Number.isNaN(performed) || performed > Date.now() + 3600_000) {
+      // old paperwork may be older than the field's five-year window, but not older than the epoch
+      if (Number.isNaN(performed) || performed < 0 || performed > Date.now() + 3600_000) {
         fail("performedAt: a past date");
         continue;
       }

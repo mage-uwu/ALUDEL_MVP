@@ -139,6 +139,9 @@ remembered in `aludel-map.json` so a rerun reuses them. A record's `performedAt`
 service and time of service in the shop's zone (`--tz`, default America/New_York), and its
 identity is the sidecar's `reportId`, so a rerun never files twice.
 
+Working notes on the whole ingest path and the query DSL, for whoever configures the sidecar:
+[`docs/INGEST.md`](docs/INGEST.md).
+
 ## Auth and tenancy
 
 Sign-in is Google OAuth (authorization code + PKCE, with `state` and `nonce`), and every
