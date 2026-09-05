@@ -6,6 +6,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { QUERY_LIMITS, type BlockKind, type Filled, type Origin, type VaultQuery } from "../shared/model";
 import type { Env } from "./index";
+import { BreakfastImports } from "./breakfast-imports";
 
 export type ReportMeta = {
   id: string;
@@ -119,10 +120,12 @@ export function compile(q: VaultQuery): { sql: string; params: (string | number)
 /** One team's stack of reports. */
 export class Vault extends DurableObject<Env> {
   private sql: SqlStorage;
+  private imports: BreakfastImports;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.imports = new BreakfastImports(ctx, env, this);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS reports (
         id TEXT PRIMARY KEY, site_id TEXT NOT NULL, site_name TEXT NOT NULL,
@@ -154,6 +157,20 @@ export class Vault extends DurableObject<Env> {
       }
     }
     this.sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS reports_origin ON reports(origin_key)");
+  }
+
+  // Only the authenticated Worker can reach this object; its namespace is per team.
+  fetch(req: Request): Promise<Response> { return this.imports.start(req); }
+  alarm(): Promise<void> { return this.imports.alarm(); }
+  importJobs() { return this.imports.list(); }
+  importJob(id: string) { return this.imports.get(id); }
+  resumeImport(id: string) { return this.imports.resume(id); }
+
+  /** No await between the duplicate lookup and insert: atomic in one DO turn. */
+  addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null): { id: string; duplicate?: true } {
+    const seen = key ? this.byOrigin(key) : null;
+    if (seen) return { id: seen, duplicate: true };
+    return { id: this.add(meta, doc, key).id };
   }
 
   /** The report already filed from this document, if any. */
