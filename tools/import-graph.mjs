@@ -2,14 +2,15 @@
 // Files a sidecar graph export into a team's vault through the import gate.
 //
 //   node tools/import-graph.mjs graph.json --team <id> --token aludel_… [--base https://…]
-//                               [--map map.json] [--tz America/New_York] [--dry] [--keep-constants]
+//                               [--map map.json] [--tz America/New_York] [--dry] [--keep-constants] [--form-labels]
 //
 // The graph is the sidecar's own shape: record → fact → block → template, plus
 // site and employee. Only that spine is read; classifier nodes are ignored. A
-// template the map has never seen is created from its blocks, a site from its
-// address (the place is left for the picker), and both are remembered in the
-// map file so a rerun reuses them. Identity is the record's own id, so a rerun
-// never files twice.
+// template the map has never seen is created from its blocks — kinds as the
+// export declares them (valueKind), inferred from the filed values when it
+// does not — a site from its address (the place is left for the picker), and
+// both are remembered in the map file so a rerun reuses them. Identity is the
+// record's externalId, so a rerun never files twice.
 import { readFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
@@ -19,12 +20,12 @@ const flag = (name, fallback) => {
 };
 const has = (name) => args.includes(`--${name}`);
 const VALUE_FLAGS = new Set(["base", "team", "token", "map", "tz"]);
+const formLabels = has("form-labels");
 const graphPath = args.find((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(args[i - 1].replace(/^--/, ""))));
 const base = (flag("base", "http://localhost:8787") ?? "").replace(/\/$/, "");
 const team = flag("team");
 const token = flag("token", process.env.ALUDEL_TOKEN);
 const mapPath = flag("map", "aludel-map.json");
-const tz = flag("tz", "America/New_York");
 const dry = has("dry");
 const keepConstants = has("keep-constants");
 if (!graphPath || !team || (!token && !dry)) {
@@ -34,6 +35,7 @@ if (!graphPath || !team || (!token && !dry)) {
 
 // ——— the graph, indexed ———
 const g = JSON.parse(readFileSync(graphPath, "utf8"));
+const tz = flag("tz", g.timezone ?? "America/New_York");
 const node = new Map(g.nodes.map((n) => [n.id, n]));
 const out = new Map(); // source id → edges by kind
 for (const e of g.edges) {
@@ -53,7 +55,8 @@ const factsOf = (rec) => targets(rec.id, "has_fact");
 const blockOf = (fact) => first(fact.id, "uses_block");
 const byLabel = (rec, labelId) => factsOf(rec).find((f) => props(f).labelId === labelId) ?? null;
 
-// ——— block kinds, inferred from every value the corpus filed under the block ———
+// ——— block kinds: declared by the export, else inferred from every value the corpus filed under the block ———
+const DECLARED = { number: "number", identifier: "text", choice: "buttons", text: "text", image: "photo", date: "text", time: "text", constant: "chrome" };
 const IMAGE = /\.(jpe?g|png|gif|heic|webp)$/i;
 const clean = (v) => (typeof v === "string" ? v.replace(/^[•\s]+/, "").trim() : v);
 const usage = new Map(); // block id → { values: [], records: Set }
@@ -66,8 +69,15 @@ for (const rec of records)
     u.values.push(clean(props(f).value));
     u.records.add(rec.id);
   }
-const kindOf = (blockId) => {
-  const u = usage.get(blockId) ?? { values: [], records: new Set() };
+const kindOf = (block) => {
+  const declared = DECLARED[props(block).valueKind];
+  if (declared === "buttons") {
+    // a choice block's keys, most frequent first; a key too long for a button leaves the block as text
+    const options = (props(block).choiceOptions ?? []).map((k) => String(clean(k))).filter(Boolean).slice(0, 6);
+    return options.length && options.every((k) => k.length <= 24) ? { kind: "buttons", options } : { kind: "text" };
+  }
+  if (declared) return { kind: declared };
+  const u = usage.get(block.id) ?? { values: [], records: new Set() };
   const vals = u.values.filter((v) => v !== "" && v !== null && v !== undefined);
   if (!vals.length) return { kind: "text" };
   if (vals.every((v) => typeof v === "number" || (typeof v === "string" && /^-?\d+(\.\d+)?$/.test(v)))) return { kind: "number" };
@@ -109,7 +119,9 @@ for (const [i, t] of templates.entries()) {
   const blocks = targets(t.id, "defines_block");
   const mine = records.filter((r) => first(r.id, "instance_of")?.id === t.id);
   const name = (mostCommon(mine.map((r) => props(byLabel(r, "form_name")).value).filter(Boolean)) ?? `Imported template ${i + 1}`).slice(0, 80);
-  const plan = blocks.map((b) => ({ graphId: b.id, label: (props(b).displayName || props(b).labelId || "Field").slice(0, 60), ...kindOf(b.id) }));
+  // the concept's name lines a series up across forms; --form-labels keeps each form's own wording
+  const labelOf = (b) => ((formLabels ? props(b).displayName : props(b).conceptDisplayName || props(b).displayName) || props(b).labelId || "Field").slice(0, 60);
+  const plan = blocks.map((b) => ({ graphId: b.id, label: labelOf(b), ...kindOf(b) }));
   const chrome = plan.filter((b) => b.kind === "chrome" && !keepConstants);
   const kept = plan.filter((b) => !chrome.includes(b)).map((b) => (b.kind === "chrome" ? { ...b, kind: "text" } : b));
   console.log(`template ${t.id} → "${name}": ${kept.length} blocks (${mine.length} records)${chrome.length ? `, ${chrome.length} constant paragraphs left on the form` : ""}`);
@@ -224,7 +236,7 @@ for (const rec of records) {
     performedAt: when,
     ...(who ? { byName: String(who).split("@")[0].slice(0, 80) } : {}),
     values,
-    origin: { file: props(rec).sourcePath ?? props(rec).archiveFolder ?? "graph", externalId: props(rec).reportId ?? rec.id },
+    origin: { file: (props(rec).sourcePath ?? props(rec).archiveFolder ?? "graph").slice(0, 200), externalId: props(rec).externalId ?? props(rec).reportId ?? rec.id },
   });
 }
 for (const s of skipped) console.log(`skip ${s.id}: ${s.reason}`);

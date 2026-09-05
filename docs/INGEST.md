@@ -95,8 +95,10 @@ column is an identifier, say so (see *Asks*).
 
 `performedAt` is stored as UTC ISO. The mapper builds it from
 `date_of_service` (`M-D-YYYY`, 1–2 digit month/day) + `time_of_service` or
-`start_time` (`h:mm AM/PM`), interpreted in `--tz` (default
-`America/New_York`) with a proper DST-aware conversion; falls back to
+`start_time` (`h:mm AM/PM`), interpreted in `--tz`, else the graph root's
+`timezone`, else `America/New_York`, with a proper DST-aware conversion; the
+export's own `performedAt` is not used (it drops the time of day for
+`M/D/YYYY` + time columns). Falls back to
 `submitted_on`, then to `Date.parse`. `groupBy: "month"` is `substr(performed_at,
 1, 7)` — **UTC months**, so a 10 pm Eastern job on the 31st counts in the next
 month. Range filters: `from` inclusive, `to` exclusive.
@@ -152,20 +154,27 @@ Reads only the spine — `record → has_fact → fact → uses_block → block`
 and ignores `graphtm_rule` and the other edges. Zero dependencies, Node 18+.
 
 - **Templates**: name = most common `form_name` value among its records, else
-  `Imported template N`. Block label = `displayName || labelId`. Kind inferred
-  from every value the corpus filed under the block: all numeric → `number`;
-  all image filenames → `photo` (dropped at import); one distinct value on ≥ 3
-  records and > 40 chars → *chrome* (the form's own paragraph; left off the
-  template unless `--keep-constants`); 2–6 distinct values ≤ 24 chars →
-  `buttons` with those keys; else `text`. Blocks are chunked 20 per task.
+  `Imported template N`. Block label = `conceptDisplayName || displayName ||
+  labelId` (`--form-labels`: `displayName` first). Kind: the export's
+  `valueKind` when present — `number` → number; `identifier`, `date`, `time`,
+  `text` → text; `choice` → buttons with `choiceOptions` (≤ 6; a key over 24
+  chars drops the block to text); `image` → photo (dropped at import);
+  `constant` → *chrome* (left off the template unless `--keep-constants`).
+  A merged checkbox block (`mergedLabelIds`) is just a choice block whose
+  facts hold the chosen key. Without `valueKind`, inferred from every value
+  the corpus filed under the block: all numeric → `number`; all image
+  filenames → `photo`; one distinct value on ≥ 3 records and > 40 chars →
+  chrome; 2–6 distinct values ≤ 24 chars → `buttons`; else `text`. Blocks are
+  chunked 20 per task.
 - **Sites**: `clientName` = most common `account_name_*` / `customer_name_*`
   pair, else the address; `locationNote` = the raw address; place left for
   the picker in the app.
 - **Values**: leading bullets/whitespace stripped (`clean`), empties skipped,
   numbers coerced for number blocks.
-- **Provenance**: `origin.file = sourcePath ?? archiveFolder ?? "graph"`,
-  `origin.externalId = reportId ?? record.id`. `byName` = employee name with
-  any `@domain` cut off.
+- **Provenance**: `origin.file = sourcePath ?? archiveFolder ?? "graph"` cut
+  at 200 chars (the gate would cut it too, never reject),
+  `origin.externalId = externalId ?? reportId ?? record.id`. `byName` =
+  employee name with any `@domain` cut off.
 - **Map file** (`aludel-map.json`): `{ templates: { <graph id>: { id, blocks: {graph block → uuid}, kinds } }, sites: { <graph id>: uuid } }`.
   Saved after each creation; a rerun reuses everything. A block that appears
   in the graph but not in the map is reported and dropped (add it in the app,
@@ -173,21 +182,35 @@ and ignores `graphtm_rule` and the other edges. Zero dependencies, Node 18+.
 - **Batches**: ≤ 200 records and ≤ 120 KB per call. Exit code 1 if any record
   failed; `--dry` prints the plan and writes nothing.
 
-## Asks of the sidecar export
+## What the sidecar export provides (branch `claude/tsetlin-pipeline-review-cadz6o`, `d2c7d48`)
 
-1. Emit `externalId` on the record (= `reportId`) so the mapper stops
-   re-deriving it, and keep `reportId` = the CSV's own id when one exists.
-2. Per block, a `valueType` hint (`number | identifier | choice | text | image |
-   date | time | constant`) so kinds are declared, not inferred — identifiers
-   stay text, choices carry their key set, constants are chrome.
-3. Merge exclusive-choice column pairs (`COVER WEATHERING` / `COVER WORN-OUT`)
-   into one block with a key set; today they arrive as two text blocks.
-4. One `displayName` per concept across forms (`DATE OF SERVICE` on every
-   form), since cross-template queries go by label.
-5. A `timezone` on the export (or per site) so the mapper's `--tz` is not a
-   guess.
-6. Classifier hygiene, separate from ingest: featurise label / concept /
-   value-type / shape, not raw value tokens; evaluate held-out by customer.
+All on `mined-graph.json` block and record nodes and in `cloudbase-import.json`;
+the mapper consumes each, and falls back to inference for older exports.
+
+1. `externalId` on record nodes and origin, always = `reportId`: the CSV's own
+   id column when one exists, else a deterministic id from logical path + row
+   order. The export's `sha256` is over the normalised Stage 2 text of the
+   report, not the source file; `page` is always 1.
+2. `valueKind` per block: `number | identifier | choice | text | image | date |
+   time | constant`; `choice` lists `choiceOptions`, most frequent first, ≤ 6.
+   Identifiers come from the label's last word or digit shape and stay text
+   here. The old `valueType` (integer | float | string) still drives Cloudbase
+   coercion and is ignored by the mapper.
+3. Exclusive checkbox columns sharing leading label words arrive as one
+   `choice` block named by the prefix, with `mergedLabelIds`; each record's
+   fact holds the chosen key. Columns that ever co-occur are left apart.
+4. `conceptDisplayName` per block: one string per `canonicalLabel` across
+   templates. The mapper uses it as the block label.
+5. `timezone` on the graph root when the job is created with
+   `?timezone=…`; times are not converted by the export.
+6. One CSV file → exactly one template.
+
+Still open, separate from ingest: classifier hygiene — featurise label /
+concept / value-type / shape, not raw value tokens; evaluate held-out by
+customer.
+
+Site and template ids in the graph are stable hashes, not UUIDs; the map file
+remains the join.
 
 ## Known gaps (not changed)
 

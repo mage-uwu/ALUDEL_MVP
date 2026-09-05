@@ -131,13 +131,17 @@ node tools/import-graph.mjs graph.json --team <id> --token aludel_… --base htt
 ```
 
 `--dry` prints the plan and writes nothing. Otherwise a template the map file has never seen is
-created from its blocks, with each block's kind inferred from every value the corpus filed under it
-(all numeric → number; a closed set of 2–6 short keys → buttons with those keys; image filenames →
-photo; the same paragraph on every record → left on the form, not filed), a site is created from
-its address with the address as the location note and the place left for the picker, and both are
-remembered in `aludel-map.json` so a rerun reuses them. A record's `performedAt` is its date of
-service and time of service in the shop's zone (`--tz`, default America/New_York), and its
-identity is the sidecar's `reportId`, so a rerun never files twice.
+created from its blocks. A block's kind is what the export declares (`valueKind`: number,
+identifier and date/time as text, choice → buttons with its `choiceOptions`, image → photo,
+constant → left on the form) and, for an export that declares nothing, inferred from every value
+the corpus filed under it (all numeric → number; a closed set of 2–6 short keys → buttons; image
+filenames → photo; the same paragraph on every record → left on the form). Blocks are labelled by
+the export's `conceptDisplayName` so one series lines up across forms (`--form-labels` keeps each
+form's own wording). A site is created from its address with the address as the location note
+and the place left for the picker, and both are remembered in `aludel-map.json` so a rerun reuses
+them. A record's `performedAt` is its date of service and time of service in the shop's zone
+(`--tz`, else the graph's `timezone`, else America/New_York), and its identity is the export's
+`externalId`, so a rerun never files twice.
 
 Working notes on the whole ingest path and the query DSL, for whoever configures the sidecar:
 [`docs/INGEST.md`](docs/INGEST.md).
