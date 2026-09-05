@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Logo } from "./logo";
+import { Imports } from "./imports";
 import { Check, ChevronLeft, ChevronRight, Grip, More, Pencil, Plus, X } from "./icons";
 import {
   DEFAULT_LABEL,
@@ -56,12 +57,13 @@ interface Invite {
   expiresAt: string;
 }
 
-type Section = "templates" | "sites" | "map" | "field";
+type Section = "templates" | "sites" | "map" | "field" | "imports";
 const SECTIONS: { key: Section; title: string }[] = [
   { key: "templates", title: "Templates" },
   { key: "sites", title: "Sites" },
   { key: "map", title: "Map" },
   { key: "field", title: "Field" },
+  { key: "imports", title: "Imports" },
 ];
 
 interface ListRef {
@@ -563,6 +565,7 @@ export default function App() {
         onSwitch={setTeamId}
       />
     );
+    if (section === "imports") return <Imports key={team.id} teamId={team.id} head={head} />;
     if (section === "sites") return <Sites team={team} head={head} onOpen={setOpenSite} />;
     if (section === "map") return <MapScreen team={team} head={head} me={me} onOpen={setOpenSite} />;
     if (section === "field") return <FieldScreen team={team} head={head} onFill={setFilling} onReport={setOpenReport} />;

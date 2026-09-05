@@ -5,14 +5,11 @@ import {
   LIMITS,
   normalizePlace,
   normalizeFilled,
-  normalizeOrigin,
   normalizeQuery,
-  originKey,
   normalizeTemplate,
   parsePlace,
   type AludelPlace,
   type Role,
-  type Template,
 } from "../shared/model";
 import { applyPlan, configured, optimize, readInput } from "./optimize";
 import { ask, CHAT, storeFor, type ChatStore } from "./chat";
@@ -31,6 +28,7 @@ import {
   type User,
 } from "./auth";
 import { ensureSchema } from "./schema";
+import { fileImportRecords } from "./import-records";
 
 
 export interface Env {
@@ -56,6 +54,10 @@ export interface Env {
   /** xAI key for the assistant (secret); XAI_ENDPOINT is a test hook standing in for api.x.ai/v1. */
   XAI_API_KEY?: string;
   XAI_ENDPOINT?: string;
+  /** Shared service credential; never exposed to clients. */
+  BFAST_API_KEY?: string;
+  /** Local integration-test stand-in; production uses the fixed Breakfast origin. */
+  BFAST_ENDPOINT?: string;
   /** Each user's chats, in that user's own Durable Object. */
   CHATS: DurableObjectNamespace<ChatStore>;
   /** Each team's filed reports and their facts, in that team's own Durable Object. */
@@ -148,6 +150,38 @@ async function teamRoutes(
   // an unknown team and a team you don't belong to are indistinguishable
   if (!role) return error(404, "Not found");
   const admin = role === "owner" || role === "admin";
+
+  // ——— document imports: authentication and team ownership precede every DO call ———
+  if (rest === "/breakfast/jobs") {
+    const vault = vaultFor(env, teamId);
+    if (req.method === "GET") return json({ configured: Boolean(env.BFAST_API_KEY), jobs: await vault.importJobs() });
+    if (req.method === "POST") {
+      const incoming = new URL(req.url);
+      const target = new URL("https://vault.internal/breakfast/jobs");
+      target.searchParams.set("teamId", teamId);
+      target.searchParams.set("userId", user.id);
+      target.searchParams.set("userName", user.name);
+      target.searchParams.set("timezone", incoming.searchParams.get("timezone") ?? "");
+      target.searchParams.set("name", incoming.searchParams.get("name") ?? "Document import");
+      return vault.fetch(new Request(target, req));
+    }
+    return error(405, "Method not allowed");
+  }
+  const importJob = rest.match(new RegExp(`^/breakfast/jobs/(${UUID})(/resume)?$`));
+  if (importJob) {
+    const vault = vaultFor(env, teamId);
+    if (req.method === "GET" && !importJob[2]) {
+      const job = await vault.importJob(importJob[1]!);
+      return job ? json(job) : error(404, "Not found");
+    }
+    if (req.method === "POST" && importJob[2]) {
+      const existing = await vault.importJob(importJob[1]!);
+      if (!existing) return error(404, "Not found");
+      const job = await vault.resumeImport(importJob[1]!);
+      return job ? json(job) : error(409, "This import has no paused records to resume");
+    }
+    return error(405, "Method not allowed");
+  }
 
   // ——— templates ———
   const tpl = rest.match(new RegExp(`^/templates(?:/(${UUID}))?$`));
@@ -590,98 +624,7 @@ async function teamRoutes(
     const body = await readBody(req);
     const records = Array.isArray(body?.records) ? body.records.slice(0, 200) : [];
     if (!records.length) return error(422, "records: 1–200 of them");
-    const vault = vaultFor(env, teamId);
-    const results: { index: number; id?: string; duplicate?: true; error?: string }[] = [];
-    // a batch is mostly one form at a few sites: look each up once
-    type SiteRow = { id: string; name: string };
-    type TplRow = { id: string; name: string; version: number; doc: string; template: Template };
-    const sites = new Map<string, Promise<SiteRow | null>>();
-    const templates = new Map<string, Promise<TplRow | null>>();
-    const siteOf = (id: string) =>
-      sites.get(id) ??
-      sites.set(id, env.DB.prepare("SELECT id, client_name AS name FROM sites WHERE id = ? AND team_id = ?").bind(id, teamId).first<SiteRow>()).get(id)!;
-    const templateOf = (id: string) =>
-      templates.get(id) ??
-      templates
-        .set(
-          id,
-          env.DB.prepare("SELECT id, name, version, doc FROM templates WHERE id = ? AND team_id = ?")
-            .bind(id, teamId)
-            .first<Omit<TplRow, "template">>()
-            .then((t) => t && { ...t, template: normalizeTemplate({ ...JSON.parse(t.doc), name: t.name })! })
-        )
-        .get(id)!;
-    for (const [index, raw] of records.entries()) {
-      const rec = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-      const fail = (error: string) => results.push({ index, error });
-      const origin = normalizeOrigin(rec.origin);
-      if (!origin) {
-        fail("origin.file required");
-        continue;
-      }
-      const key = originKey(origin);
-      const seen = key ? await vault.byOrigin(key) : null;
-      if (seen) {
-        results.push({ index, id: seen, duplicate: true });
-        continue;
-      }
-      const site = await siteOf(field(rec.siteId, 36));
-      if (!site) {
-        fail("Unknown site");
-        continue;
-      }
-      const tpl = await templateOf(field(rec.templateId, 36));
-      if (!tpl) {
-        fail("Unknown template");
-        continue;
-      }
-      const doc = normalizeFilled(tpl.template, rec);
-      if (!doc) {
-        fail("Nothing filled in");
-        continue;
-      }
-      const performed = typeof rec.performedAt === "string" ? Date.parse(rec.performedAt) : NaN;
-      // old paperwork may be older than the field's five-year window, but not older than the epoch
-      if (Number.isNaN(performed) || performed < 0 || performed > Date.now() + 3600_000) {
-        fail("performedAt: a past date");
-        continue;
-      }
-      // the record files against a dispatch, made on the spot when this site was never dispatched in the app
-      let dispatch = await env.DB.prepare("SELECT id FROM dispatches WHERE site_id = ? AND template_id = ?")
-        .bind(site.id, tpl.id)
-        .first<{ id: string }>();
-      if (!dispatch) {
-        dispatch = { id: crypto.randomUUID() };
-        await env.DB.prepare(
-          `INSERT INTO dispatches (id, team_id, site_id, template_id, template_version, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
-        )
-          .bind(dispatch.id, teamId, site.id, tpl.id, tpl.version, user.id, nowIso())
-          .run();
-      }
-      const bytes = new TextEncoder().encode(JSON.stringify(doc));
-      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-      const added = await vault.add(
-        {
-          id: crypto.randomUUID(),
-          siteId: site.id,
-          siteName: site.name,
-          templateId: tpl.id,
-          templateName: tpl.name,
-          templateVersion: tpl.version,
-          dispatchId: dispatch.id,
-          byUser: user.id,
-          byName: field(rec.byName, 80) || user.name,
-          performedAt: new Date(performed).toISOString(),
-          submittedAt: nowIso(),
-          hash,
-          origin,
-        },
-        doc,
-        key
-      );
-      results.push({ index, id: added.id });
-    }
-    return json({ filed: results.filter((r) => r.id && !r.duplicate).length, results });
+    return json(await fileImportRecords(env, teamId, user, records, vaultFor(env, teamId)));
   }
 
   // ——— the field and the vault: what may be filed, filing it, and asking the stack ———

@@ -85,6 +85,63 @@ team's object, so it cannot be injected and cannot cross teams; it is the tool a
 
 ### Importing old documents
 
+Open **Imports** in the section menu to send documents directly to Breakfast.
+Choose ZIP, CSV/TSV, JSON/JSONL, text or Markdown files (64 MiB including multipart
+framing) and the timezone used on the paperwork. PDFs, DOCX and scanned images
+need text extraction/OCR before upload. Processing and filing continue in the
+team's existing Vault Durable Object after the page closes. Recent imports show
+progress, filed/duplicate/rejected counts and the first 50 rejected records.
+
+Configure the ALUDEL Worker with **the same secret value** as Breakfast's
+`BFAST_API_KEY`:
+
+```sh
+npx wrangler secret put BFAST_API_KEY
+```
+
+The production service is
+`https://breakfast-tm-container.lafayettejcompton.workers.dev`. Credentials remain
+server-side; no browser CORS setup or extra ALUDEL integration token is needed
+for this built-in flow. No new Cloudflare binding or migration is required.
+Until the secret exists, Imports explains that the connection is not configured.
+
+The app submits once, polls Breakfast with durable alarms, stages the returned
+graph and files ten items at a time through the same validation gate as `/import`.
+Each upload gets a local UUID (`X-Import-Id`); repeating that UUID returns the
+existing job without resending its files. A lost upload confirmation is shown as
+uncertain and is never automatically retried. An explicit 429 reports Breakfast's
+`Retry-After`. Filing retries are idempotent and can be resumed after repeated
+storage failures. Requests are authorized before accessing the team's queue.
+
+Template IDs include the exported schema so unrelated `template_01` buckets
+cannot overwrite one another. Sites reuse their normalized address or an existing
+normalized place, and records use the source `externalId` for deduplication.
+Existing templates/sites are never overwritten. Address-only sites retain their
+address as a note for the place picker. Identifier fields stay text, choices keep
+their keys, dates are interpreted in the chosen timezone, and records without a
+valid date are reported as rejected. Constants and photo values follow the current
+graph importer's behavior (constants omitted; photos not filed).
+
+The Worker bounds graph responses at 16 MiB to leave memory for parsing and
+mapping; larger results ask the user to split the input. Individual staged records and
+templates are limited to 120 KiB; oversized records are reported as rejected. Raw documents remain in
+Breakfast; ALUDEL retains job checkpoints, normalized import items and filed
+reports. TRANSMUTE is disabled for these imports.
+
+Authenticated team routes:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/teams/:id/breakfast/jobs` | Connection configuration and the 30 latest team jobs. |
+| `POST /api/teams/:id/breakfast/jobs?timezone=...&name=...` | Multipart upload; requires UUID `X-Import-Id`; returns 202 with the local job. |
+| `GET /api/teams/:id/breakfast/jobs/:jobId` | Progress, counts and up to 50 record errors. |
+| `POST /api/teams/:id/breakfast/jobs/:jobId/resume` | Resume paused filing from saved items, without another Breakfast upload. |
+
+`npm test` runs the graph mapper and the actual Worker, D1, and SQLite Durable
+Objects in Miniflare against a local fake Breakfast server. It covers auth,
+cross-team access, multipart forwarding, progress recovery, duplicate imports,
+typed facts, uncertain uploads and persisted jobs; it does not call production.
+
 A sidecar that reads old paperwork files it into the same vault through the same gate, so an
 imported report is queryable exactly like one filed from a phone. It authenticates with an
 **integration token** (Members → Integrations; shown once, stored hashed, revocable) which acts as a
@@ -249,4 +306,3 @@ not served to anyone. To adopt them into a team:
 wrangler d1 execute aludel --remote --command \
   "UPDATE templates SET team_id = '<team-id>' WHERE team_id IS NULL"
 ```
-

@@ -53,8 +53,9 @@ call itself always 200s):
 5. Dispatch for (site, template) reused or minted on the spot.
 6. `hash` = SHA-256 of the normalised doc JSON; `templateVersion` = the
    template's current version; `submittedAt` = now.
-7. `vault.add(meta, doc, key)` — one transaction: the report row plus one
-   `facts` row per filled block.
+7. `vault.addImported(meta, doc, key)` checks the origin again and appends in
+   one synchronous Durable Object turn: the report row plus one `facts` row per
+   filled block. A concurrent duplicate returns the earlier id.
 
 Response: `{ filed, results: [{ index, id } | { index, id, duplicate: true } | { index, error }] }`.
 
@@ -62,9 +63,9 @@ Response: `{ filed, results: [{ index, id } | { index, id, duplicate: true } | {
 from the CSV's `Submission Id`; verified across reruns). Never `sourcePath`
 (`zip://<sha>/<inner path>#row=N` changes on repack). `sha256 + page` is a
 sound exact-content fallback (page is always 1 for CSV rows). The vault holds
-a `UNIQUE` index on `origin_key`; two *concurrent* imports of the same key
-would make the loser throw inside `add` and 500 the batch — run one importer
-at a time (a rerun afterwards is clean: everything comes back `duplicate`).
+a `UNIQUE` index on `origin_key`; `addImported` checks and inserts without an
+await between them, so concurrent attempts return the existing id. Dispatch
+creation likewise tolerates another importer creating the same site/template pair.
 
 ## Templates, blocks, facts
 
@@ -214,11 +215,23 @@ remains the join.
 
 ## Known gaps (not changed)
 
-- Concurrent imports of the same key race on the `UNIQUE(origin_key)` index
-  (see *Identity*).
 - `label` clauses are substring matches; `"WEEK"` also hits `"WEEKLY NOTES"`.
 - Month grouping is in UTC.
 - `byName` defaults to the token's name, so a record naming no technician
   reads as filed by the integration, not by nobody.
 - Field `/reports` POST enforces a five-year window; import does not (by
   design — old paperwork), floor is the epoch.
+
+## Built-in Breakfast connection
+
+The Imports screen now runs this flow directly. See the README for the team
+routes and the `BFAST_API_KEY` secret. The Worker forwards uploads to the fixed
+Breakfast origin and the team's Vault stores jobs, progress and staged records.
+Durable alarms poll and file in bounded batches without an open browser.
+
+`src/worker/graph-import.ts` ports the CLI mapper's typing and graph traversal,
+adds strict timezone parsing and service-date aliases, and derives team-scoped
+UUIDs from schema/address identity. Schema changes get a new template rather
+than dropping new fields. These IDs are independent of legacy `aludel-map.json`
+files; CLI-created templates/sites are not automatically adopted. Both paths
+share the same source-record deduplication and `fileImportRecords` gate.
