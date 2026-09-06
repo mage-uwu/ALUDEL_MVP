@@ -181,3 +181,49 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 120
     const completed = await waitFor(pending.id); assert.equal(completed.duplicates, 2);
   });
 });
+
+function resolvedFixture(date = {value:"2024-07-01",precision:"date"}) {
+  const g = fixture();
+  const person = name => ({name,firstName:null,lastName:null,emails:[],phones:[]});
+  for (const r of g.nodes.filter(n => n.kind === "record")) r.properties.semantics = {
+    schemaVersion:1, client:person("Wanda Namesake"), employee:person(null), user:person("Account Owner"), date, serviceAddresses:["10 Main Street, Albany, NY"],
+  };
+  return g;
+}
+
+test("resolved contract governs names and dates; display renaming cannot change imported field identity", async () => {
+  const graph = resolvedFixture();
+  const a = await planGraph(graph, teamA, "contract", "America/New_York");
+  const renamed = structuredClone(graph);
+  for (const n of renamed.nodes.filter(n => ["template","block"].includes(n.kind))) {n.properties.displayName="Same new wording";n.properties.conceptDisplayName="Same new wording";}
+  const b = await planGraph(renamed, teamA, "contract", "America/New_York");
+  const records = p => p.filter(i=>i.kind==="record").map(i=>i.payload);
+  assert.deepEqual(records(a), records(b));
+  assert.equal(a[0].payload.id,b[0].payload.id);
+  assert.equal(a.find(i=>i.kind==="site").payload.clientName,"Wanda Namesake");
+  assert.equal(records(a)[0].performedAt,"2024-07-01");
+  assert.equal(records(a)[0].byName,"");
+  const unknown = await planGraph(resolvedFixture(null),teamA,"contract","America/New_York");
+  assert.equal(unknown.filter(i=>i.kind==="rejected").length,2);
+  const badVersion=resolvedFixture();badVersion.nodes.find(n=>n.kind==="record").properties.semantics.schemaVersion=2;
+  await assert.rejects(()=>planGraph(badVersion,teamA,"contract","America/New_York"),/semantics contract/);
+});
+
+test("filing retains date-only precision and never substitutes the uploader for an unknown worker", async () => {
+  const buildResult=await build({entryPoints:["src/worker/import-records.ts"],bundle:true,write:false,format:"esm",platform:"neutral"});
+  const {fileImportRecords}=await import(`data:text/javascript;base64,${Buffer.from(buildResult.outputFiles[0].text).toString("base64")}`);
+  const plan=await planGraph(resolvedFixture(),teamA,"contract","America/New_York");
+  const template=plan.find(i=>i.kind==="template").payload, site=plan.find(i=>i.kind==="site").payload;
+  const env={DB:{prepare(sql){return {bind(){return this;},async first(){
+    if(sql.includes("FROM sites"))return {id:site.id,name:site.clientName};
+    if(sql.includes("FROM templates"))return {id:template.id,name:template.name,version:1,doc:JSON.stringify({tasks:template.tasks})};
+    if(sql.includes("FROM dispatches"))return {id:randomUUID()};
+    throw new Error(sql);
+  }};}}};
+  const saved=[];const vault={byOrigin:()=>null,addImported(meta){saved.push(meta);return {id:meta.id};}};
+  const raw=plan.find(i=>i.kind==="record").payload;
+  const result=await fileImportRecords(env,teamA,{id:randomUUID(),name:"Uploader"},[raw],vault);
+  assert.equal(result.filed,1);assert.equal(saved[0].performedAt,"2024-07-01");assert.equal(saved[0].byName,"");
+  const unknown=structuredClone(raw);unknown.semantics.date=null;unknown.performedAt="2024-01-01T00:00:00Z";
+  assert.equal((await fileImportRecords(env,teamA,{id:randomUUID(),name:"Uploader"},[unknown],vault)).filed,0);
+});

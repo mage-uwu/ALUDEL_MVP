@@ -306,3 +306,25 @@ not served to anyone. To adopt them into a team:
 wrangler d1 execute aludel --remote --command \
   "UPDATE templates SET team_id = '<team-id>' WHERE team_id IS NULL"
 ```
+
+
+Breakfast semantic contract
+---------------------------
+
+New Breakfast graph records include `properties.semantics.schemaVersion: 1`.
+The importer uses its resolved client/employee/user identities and date instead
+of inferring them from display labels. Template and block IDs are independent
+of LLM display wording. Existing graphs without the contract retain the legacy
+adapter.
+
+A resolved date has `value` and `precision` (`date` or `timestamp`). Date-only
+records retain `YYYY-MM-DD` in storage and display as dates without a fabricated
+clock. A null date stays unfiled with a reason, even if raw fields contain another
+date. An unknown worker name stays empty and does not become the uploader or an
+email username. Unsupported versions and malformed resolved dates are rejected.
+
+Deploy the compatible importer before the Breakfast contract update. Cached
+completed jobs must be re-imported to populate resolved semantics. Changing the
+schema identity calculation can create new templates when re-importing records
+previously imported with the display-dependent calculation; existing templates
+are not migrated or deleted.

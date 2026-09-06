@@ -1,3 +1,4 @@
+import { readBreakfastSemantics } from "../shared/breakfast";
 import { LIMITS, normalizePlace, normalizeTemplate, type BlockKind } from "../shared/model";
 
 type Props = Record<string, unknown>;
@@ -67,6 +68,7 @@ export async function planGraph(input: unknown, teamId: string, jobId: string, t
   const first = (id: string, kind: string) => targets(id, kind)[0];
   const records = g.nodes.filter(n => n.kind === "record");
   if (!records.length) throw new Error("Breakfast returned no report records");
+  const semantics = new Map(records.map(r => [r.id, readBreakfastSemantics(props(r).semantics)]));
   const facts = (r: Node) => targets(r.id, "has_fact");
   const value = (r: Node, ...labels: string[]) => props(facts(r).find(f => labels.includes(text(props(f).labelId)) || labels.includes(text(props(f).canonicalLabel)))).value;
   const usage = new Map<string, unknown[]>();
@@ -96,7 +98,7 @@ export async function planGraph(input: unknown, teamId: string, jobId: string, t
     const blocks = targets(t.id, "defines_block").map(b => ({ graphId: b.id, label: (text(props(b).conceptDisplayName) || text(props(b).displayName) || text(props(b).labelId) || "Field").slice(0, 60), ...kindOf(b) })).filter(b => b.kind !== "chrome");
     if (blocks.length > LIMITS.tasks * LIMITS.blocks) throw new Error(`Template ${name} exceeds 600 fields; split this source before importing`);
     // Schema is part of identity: another upload's template_01 must never reuse an unrelated form.
-    const schema = JSON.stringify([name, blocks.map(b => [b.graphId, b.label, b.kind, b.options]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
+    const schema = JSON.stringify([t.id, blocks.map(b => [b.graphId, b.kind, b.options]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
     const id = await uuid(`${teamId}:template:${schema}`);
     const mapped = new Map<string, { id: string; kind: BlockKind }>();
     for (const b of blocks) mapped.set(b.graphId, { id: await uuid(`${id}:${b.graphId}`), kind: b.kind as BlockKind });
@@ -109,7 +111,7 @@ export async function planGraph(input: unknown, teamId: string, jobId: string, t
   for (const s of g.nodes.filter(n => n.kind === "site")) {
     const p = props(s), address = text(p.address);
     const mine = records.filter(r => first(r.id, "at_site")?.id === s.id);
-    const names = mine.map(r => [value(r, "account_name_first", "customer_name_first"), value(r, "account_name_last", "customer_name_last")].map(text).filter(Boolean).join(" "));
+    const names = mine.map(r => semantics.get(r.id) ? semantics.get(r.id)!.client.name || "" : [value(r, "account_name_first", "customer_name_first"), value(r, "account_name_last", "customer_name_last")].map(text).filter(Boolean).join(" "));
     // Only an already normalized place is accepted; raw addresses remain notes for the picker.
     const place = normalizePlace(p.place);
     const key = place?.googlePlaceId || address.toLowerCase().replace(/\s+/g, " ") || `${jobId}:${s.id}`;
@@ -119,7 +121,8 @@ export async function planGraph(input: unknown, teamId: string, jobId: string, t
   for (const r of records) {
     const p = props(r), t = first(r.id, "instance_of"), s = first(r.id, "at_site");
     const tm = t && templates.get(t.id), siteId = s && sites.get(s.id);
-    const when = paperTime(value(r, "date_of_service", "service_date", "performed_date", "visit_date", "performed_at"), value(r, "time_of_service", "start_time", "service_time"), timezone)
+    const resolved = semantics.get(r.id);
+    const when = resolved ? resolved.date?.value ?? null : paperTime(value(r, "date_of_service", "service_date", "performed_date", "visit_date", "performed_at"), value(r, "time_of_service", "start_time", "service_time"), timezone)
       || paperTime(value(r, "submitted_on"), "", timezone) || paperTime(p.performedAt, "", timezone);
     const reject = (error: string) => plan.push({ kind: "rejected", payload: { record: r.id, error } });
     if (!tm || !siteId || !when) { reject(!tm ? "No template" : !siteId ? "No site" : "No valid date of service"); continue; }
@@ -131,7 +134,7 @@ export async function planGraph(input: unknown, teamId: string, jobId: string, t
     }
     const externalId = text(p.externalId) || text(p.reportId) || r.id;
     if (externalId.length > 120) { reject("Source report ID exceeds 120 characters"); continue; }
-    plan.push({ kind: "record", payload: { siteId, templateId: tm.id, performedAt: when, byName: text(props(first(r.id, "performed_by")).name).split("@")[0], values,
+    plan.push({ kind: "record", payload: { siteId, templateId: tm.id, performedAt: when, byName: resolved ? resolved.employee.name || "" : text(props(first(r.id, "performed_by")).name).split("@")[0], ...(resolved ? {semantics:resolved} : {}), values,
       origin: { file: (text(p.sourcePath) || text(p.archiveFolder) || "graph").slice(0, 200), externalId, ...(typeof p.sha256 === "string" ? { sha256: p.sha256, page: 1 } : {}) } } });
   }
   const encoder = new TextEncoder();
