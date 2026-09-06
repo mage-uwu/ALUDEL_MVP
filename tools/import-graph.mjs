@@ -48,6 +48,11 @@ const targets = (id, kind) => (out.get(id)?.get(kind) ?? []).map((e) => node.get
 const first = (id, kind) => targets(id, kind)[0] ?? null;
 
 const records = g.nodes.filter((n) => n.kind === "record");
+const resolved = new Map(records.map(rec => {
+  const s = props(rec).semantics;
+  if (s !== undefined && (!s || s.schemaVersion !== 1)) throw new Error("Unsupported Breakfast semantics contract");
+  return [rec.id, s];
+}));
 const props = (n) => n?.properties ?? {};
 
 // facts of a record, keyed by labelId and by block id
@@ -152,6 +157,7 @@ for (const [i, t] of templates.entries()) {
 
 // ——— sites ———
 const nameOf = (rec) => {
+  if (resolved.has(rec.id) && resolved.get(rec.id)) return resolved.get(rec.id).client.name || "";
   const v = (label) => clean(props(byLabel(rec, label)).value) || "";
   const person = [v("account_name_first") || v("customer_name_first"), v("account_name_last") || v("customer_name_last")].filter(Boolean).join(" ");
   return person;
@@ -185,6 +191,7 @@ const clock = (s) => {
   return [h, +m[2]];
 };
 const performedAt = (rec) => {
+  if (resolved.get(rec.id)) return resolved.get(rec.id).date?.value || null;
   const date = clean(props(byLabel(rec, "date_of_service")).value);
   const time = clean(props(byLabel(rec, "time_of_service") ?? byLabel(rec, "start_time")).value);
   const submitted = clean(props(byLabel(rec, "submitted_on")).value);
@@ -229,12 +236,13 @@ for (const rec of records) {
     if (v === "" || v === null || v === undefined) continue;
     values[id] = tm.kinds[b.id] === "number" ? Number(v) : String(v);
   }
-  const who = props(first(rec.id, "performed_by")).name;
+  const semantic = resolved.get(rec.id);
+  const who = semantic ? semantic.employee.name : props(first(rec.id, "performed_by")).name;
   payload.push({
     siteId,
     templateId: tm.id,
     performedAt: when,
-    ...(who ? { byName: String(who).split("@")[0].slice(0, 80) } : {}),
+    ...(semantic ? {semantics:semantic, byName:who || ""} : who ? {byName:String(who).split("@")[0].slice(0,80)} : {}),
     values,
     origin: { file: (props(rec).sourcePath ?? props(rec).archiveFolder ?? "graph").slice(0, 200), externalId: props(rec).externalId ?? props(rec).reportId ?? rec.id },
   });

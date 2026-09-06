@@ -1,3 +1,4 @@
+import { readBreakfastSemantics } from "../shared/breakfast";
 import { normalizeFilled, normalizeOrigin, normalizeTemplate, originKey, type Template, type Filled } from "../shared/model";
 import type { Env } from "./index";
 import type { User } from "./auth";
@@ -37,6 +38,9 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
   for (const [index, raw] of records.entries()) {
     const rec = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
     const fail = (error: string) => results.push({ index, error });
+    let semantics;
+    try { semantics = readBreakfastSemantics(rec.semantics); }
+    catch { fail("Invalid semantics contract"); continue; }
     const origin = normalizeOrigin(rec.origin);
     if (!origin) {
       fail("origin.file required");
@@ -63,7 +67,8 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
       fail("Nothing filled in");
       continue;
     }
-    const performed = typeof rec.performedAt === "string" ? Date.parse(rec.performedAt) : NaN;
+    const date = semantics ? semantics.date?.value ?? null : rec.performedAt;
+    const performed = typeof date === "string" ? Date.parse(date) : NaN;
     // old paperwork may be older than the field's five-year window, but not older than the epoch
     if (Number.isNaN(performed) || performed < 0 || performed > Date.now() + 3600_000) {
       fail("performedAt: a past date");
@@ -97,8 +102,8 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
         templateVersion: tpl.version,
         dispatchId: dispatch.id,
         byUser: user.id,
-        byName: field(rec.byName, 80) || user.name,
-        performedAt: new Date(performed).toISOString(),
+        byName: semantics ? field(semantics.employee.name, 80) : field(rec.byName, 80) || user.name,
+        performedAt: semantics?.date?.precision === "date" ? semantics.date.value : new Date(performed).toISOString(),
         submittedAt: nowIso(),
         hash,
         origin,

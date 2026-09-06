@@ -161,7 +161,11 @@ interface Meta {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+const reportDate = (iso: string): string => /^\d{4}-\d{2}-\d{2}$/.test(iso)
+  ? new Date(`${iso}T00:00:00Z`).toLocaleDateString([], {dateStyle:"medium", timeZone:"UTC"})
+  : new Date(iso).toLocaleString([], {dateStyle:"medium", timeStyle:"short"});
 const ago = (iso: string): string => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return reportDate(iso);
   const s = (Date.now() - Date.parse(iso)) / 1000;
   if (!Number.isFinite(s) || s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -1528,7 +1532,7 @@ function ReportScreen({ teamId, id, onBack }: { teamId: string; id: string; onBa
         <div className="home-title">
           <h1 className="site-title">{report.templateName}</h1>
           <span className="team-name">
-            {report.siteName} · {new Date(report.performedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · {report.byName}
+            {report.siteName} · {reportDate(report.performedAt)} · {report.byName}
             {report.origin ? ` · from ${report.origin.file}${report.origin.page ? ` p.${report.origin.page}` : ""}` : ""}
           </span>
         </div>
