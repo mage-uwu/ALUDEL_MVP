@@ -99,7 +99,7 @@ export function Imports({ teamId, head }: { teamId: string; head: React.ReactNod
       <p role="status">{job.message}</p>
       {job.total > 0 && <p className="template-meta">{job.processed}/{job.total} records · {job.filed} filed · {job.duplicates} already present · {job.rejected} rejected</p>}
       {job.rejected > 0 && <button className="big-btn" onClick={() => inspect(job)}>View rejected records</button>}
-      {job.resumable && <button className="big-btn" onClick={() => resume(job)}>Resume filing</button>}
+      {job.resumable && <button className="big-btn" onClick={() => resume(job)}>Resume import</button>}
     </section>)}
     {details && <section className="card glass-frosted import-panel" aria-label="Rejected records">
       <div className="import-title"><strong>Rejected records</strong><button onClick={() => setDetails(null)} aria-label="Close rejected records">Close</button></div>

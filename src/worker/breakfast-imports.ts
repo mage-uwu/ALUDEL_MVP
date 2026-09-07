@@ -1,7 +1,8 @@
 import { IMPORT_MAX_BYTES, type ImportJob } from "../shared/breakfast";
 import { normalizePlace, normalizeTemplate } from "../shared/model";
 import { breakfast, breakfastKey, BreakfastError, limitStream, uploadHeaders } from "./breakfast-api";
-import { planGraph, type ImportItem } from "./graph-import";
+import { type ImportItem } from "./graph-import";
+import { readTransferPage, planTransferPage, type TransferRow } from "./import-transfer";
 import { fileImportRecords, type ImportVault } from "./import-records";
 import type { Env } from "./index";
 
@@ -29,24 +30,40 @@ export class BreakfastImports {
     ); CREATE TABLE IF NOT EXISTS breakfast_items (
       job_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL,
       outcome TEXT, error TEXT, PRIMARY KEY(job_id, seq)
-    ); CREATE INDEX IF NOT EXISTS breakfast_pending ON breakfast_items(job_id, outcome, seq);`);
+    ); CREATE INDEX IF NOT EXISTS breakfast_pending ON breakfast_items(job_id, outcome, seq);
+    CREATE TABLE IF NOT EXISTS breakfast_transfers (
+      job_id TEXT PRIMARY KEY, cursor TEXT, snapshot TEXT NOT NULL, next_seq INTEGER NOT NULL,
+      total_items INTEGER NOT NULL, total_records INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0
+    ); CREATE TABLE IF NOT EXISTS breakfast_catalog (
+      job_id TEXT NOT NULL, kind TEXT NOT NULL, source_id TEXT NOT NULL, mapping TEXT NOT NULL,
+      PRIMARY KEY(job_id,kind,source_id)
+    );`);
   }
   private row(id: string) { return this.sql.exec<JobRow>("SELECT * FROM breakfast_jobs WHERE id = ?", id).toArray()[0]; }
+  private transfer(id: string) { return this.sql.exec<TransferRow>("SELECT * FROM breakfast_transfers WHERE job_id = ?", id).toArray()[0]; }
+  private needsTransfer(row: JobRow) {
+    // Existing beta failures predate cursor storage and lost their original phase.
+    return row.phase === "transfer" || row.message === "The processed result is too large. Split the source into smaller uploads.";
+  }
   private view(row: JobRow): ImportJob {
     const c = this.sql.exec<{ total: number; filed: number; duplicates: number; rejected: number; processed: number }>(`SELECT
       COUNT(*) AS total, COALESCE(SUM(outcome = 'filed'),0) AS filed, COALESCE(SUM(outcome = 'duplicate'),0) AS duplicates,
       COALESCE(SUM(outcome = 'rejected'),0) AS rejected, COUNT(outcome) AS processed
       FROM breakfast_items WHERE job_id = ? AND kind IN ('record','rejected')`, row.id).toArray()[0]!;
-    return { id: row.id, name: row.name, state: row.state, phase: row.phase, percent: row.percent, message: row.message,
-      createdAt: row.created_at, updatedAt: row.updated_at, ...c,
-      resumable: row.state === "failed" && Boolean(row.upstream_id) && this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM breakfast_items WHERE job_id = ? AND outcome IS NULL", row.id).toArray()[0]!.n > 0 };
+    return {
+      id: row.id, name: row.name, state: row.state, phase: row.phase, percent: row.percent, message: row.message,
+      createdAt: row.created_at, updatedAt: row.updated_at, ...c, total: this.transfer(row.id)?.total_records ?? c.total,
+      resumable: row.state === "failed" && Boolean(row.upstream_id) && (this.needsTransfer(row) || this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM breakfast_items WHERE job_id = ? AND outcome IS NULL", row.id).toArray()[0]!.n > 0)
+    };
   }
   list(): ImportJob[] { return this.sql.exec<JobRow>("SELECT * FROM breakfast_jobs ORDER BY created_at DESC LIMIT 30").toArray().map(r => this.view(r)); }
   get(id: string): ImportJob | null {
     const row = this.row(id); if (!row) return null;
-    return { ...this.view(row), errors: this.sql.exec<{ record: string; error: string }>(`SELECT
+    return {
+      ...this.view(row), errors: this.sql.exec<{ record: string; error: string }>(`SELECT
       COALESCE(json_extract(payload, '$.record'), json_extract(payload, '$.origin.externalId'), 'Record') AS record, error
-      FROM breakfast_items WHERE job_id = ? AND error IS NOT NULL ORDER BY seq LIMIT 50`, id).toArray() };
+      FROM breakfast_items WHERE job_id = ? AND error IS NOT NULL ORDER BY seq LIMIT 50`, id).toArray()
+    };
   }
   private update(id: string, state: ImportJob["state"], message: string, phase: string = state, percent?: number, delay = 2000) {
     this.sql.exec("UPDATE breakfast_jobs SET state = ?, phase = ?, message = ?, updated_at = ?, next_poll = ?, percent = COALESCE(?, percent) WHERE id = ?",
@@ -92,8 +109,10 @@ export class BreakfastImports {
   }
   async resume(id: string): Promise<ImportJob | null> {
     const job = this.get(id); if (!job?.resumable) return null;
+    const transfer = this.needsTransfer(this.row(id)!);
     this.sql.exec("UPDATE breakfast_jobs SET attempts = 0 WHERE id = ?", id);
-    this.update(id, "importing", "Resuming saved records", "filing"); await this.schedule(); return this.get(id);
+    this.update(id, transfer ? "processing" : "importing", transfer ? "Resuming result download" : "Resuming saved records", transfer ? "transfer" : "filing");
+    await this.schedule(); return this.get(id);
   }
   async alarm(): Promise<void> {
     // Install the next alarm before awaiting D1/network work. A lost response is replay-safe.
@@ -109,7 +128,7 @@ export class BreakfastImports {
       const attempts = row.attempts + 1;
       this.sql.exec("UPDATE breakfast_jobs SET attempts = ? WHERE id = ?", attempts, row.id);
       const permanent = e instanceof BreakfastError && [401, 403, 404, 413, 422].includes(e.status);
-      if (permanent || (row.state === "importing" && attempts >= 6)) this.update(row.id, "failed", permanent ? e.message : "Filing paused after repeated errors. Resume to continue from the saved records.");
+      if (permanent || ((row.state === "importing" || row.phase === "transfer") && attempts >= 6)) this.update(row.id, "failed", permanent ? e.message : "Import paused after repeated errors. Resume to continue from saved progress.", row.phase);
       else {
         const retry = e instanceof BreakfastError ? e.retryAfter : null;
         const hinted = retry ? (/^\d+$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - Date.now()) : 0;
@@ -121,6 +140,7 @@ export class BreakfastImports {
     } finally { await this.schedule(); }
   }
   private async poll(row: JobRow) {
+    if (row.phase === "transfer") { await this.receivePage(row); return; }
     const path = `/v1/pipeline/jobs/${encodeURIComponent(row.upstream_id!)}`;
     const status = await breakfast(this.env, path);
     if (status.state === "failed") { this.update(row.id, "failed", typeof status.error === "string" ? status.error.slice(0, 500) : "Document processing failed"); return; }
@@ -130,14 +150,52 @@ export class BreakfastImports {
       this.update(row.id, "processing", typeof status.message === "string" ? status.message.slice(0, 500) : "Processing documents", typeof status.phase === "string" ? status.phase.slice(0, 60) : "processing", percent);
       return;
     }
-    const graph = await breakfast(this.env, `${path}/graph`, {}, 60_000);
-    let plan: ImportItem[];
-    try { plan = await planGraph(graph, row.team_id, row.id, row.timezone); }
-    catch (e) { throw new BreakfastError(e instanceof Error ? e.message : "Invalid import graph", 422); }
+    row.phase = "transfer";
+    this.update(row.id, "processing", "Receiving processed records", "transfer", 0);
+    await this.receivePage(row);
+  }
+  private async receivePage(row: JobRow) {
+    const previous = this.transfer(row.id);
+    const path = `/v1/pipeline/jobs/${encodeURIComponent(row.upstream_id!)}/import`;
+    let raw;
+    try { raw = await breakfast(this.env, path + (previous?.cursor ? `?cursor=${encodeURIComponent(previous.cursor)}` : ""), {}, 60_000); }
+    catch (e) {
+      if (!(e instanceof BreakfastError) || e.status !== 409 || !previous) throw e;
+      // Nothing files until every page is staged, so a changed source snapshot
+      // can safely restart the download without mixing two versions or reuploading.
+      this.ctx.storage.transactionSync(() => {
+        const current = this.transfer(row.id);
+        if (current?.next_seq !== previous.next_seq || current?.snapshot !== previous.snapshot || current?.complete) return;
+        this.sql.exec("DELETE FROM breakfast_items WHERE job_id = ?", row.id);
+        this.sql.exec("DELETE FROM breakfast_catalog WHERE job_id = ?", row.id);
+        this.sql.exec("DELETE FROM breakfast_transfers WHERE job_id = ?", row.id);
+        this.update(row.id, "processing", "Processed records changed; restarting download", "transfer", 0, 1000);
+      });
+      return;
+    }
+    let page, plan;
+    try {
+      page = readTransferPage(raw, row.upstream_id!, previous);
+      plan = await planTransferPage(page, row.team_id, row.id, row.timezone, (kind, source) => {
+        const item = this.sql.exec<{ mapping: string }>("SELECT mapping FROM breakfast_catalog WHERE job_id = ? AND kind = ? AND source_id = ?", row.id, kind, source).toArray()[0];
+        return item ? JSON.parse(item.mapping) : undefined;
+      });
+    } catch (e) { throw new BreakfastError(e instanceof Error ? e.message : "Invalid import page", 422); }
     this.ctx.storage.transactionSync(() => {
-      for (const [seq, item] of plan.entries()) this.sql.exec("INSERT OR IGNORE INTO breakfast_items (job_id,seq,kind,payload,outcome,error) VALUES (?,?,?,?,?,?)",
-        row.id, seq, item.kind, JSON.stringify(item.payload), item.kind === "rejected" ? "rejected" : null, item.kind === "rejected" ? String(item.payload.error) : null);
-      this.update(row.id, "importing", "Filing records into your vault", "filing", 0);
+      const current = this.transfer(row.id);
+      if ((current?.next_seq ?? 0) !== page.start || current?.snapshot !== previous?.snapshot) return;
+      for (const item of plan.catalog) this.sql.exec("INSERT INTO breakfast_catalog (job_id,kind,source_id,mapping) VALUES (?,?,?,?) ON CONFLICT(job_id,kind,source_id) DO UPDATE SET mapping=excluded.mapping",
+        row.id, item.kind, item.source, JSON.stringify(item.mapping));
+      for (const [offset, item] of plan.items.entries()) this.sql.exec("INSERT OR IGNORE INTO breakfast_items (job_id,seq,kind,payload,outcome,error) VALUES (?,?,?,?,?,?)",
+        row.id, page.start + offset, item.kind, JSON.stringify(item.payload), item.kind === "rejected" ? "rejected" : null, item.kind === "rejected" ? String(item.payload.error) : null);
+      const end = page.start + page.items.length, done = page.nextCursor === null;
+      if (done) {
+        const staged = this.sql.exec<{ total: number; records: number }>("SELECT COUNT(*) AS total, COALESCE(SUM(kind IN ('record','rejected')),0) AS records FROM breakfast_items WHERE job_id = ?", row.id).toArray()[0]!;
+        if (staged.total !== page.totalItems || staged.records !== page.totalRecords) throw new BreakfastError("Breakfast import record count does not match its manifest", 422);
+      }
+      this.sql.exec("INSERT INTO breakfast_transfers (job_id,cursor,snapshot,next_seq,total_items,total_records,complete) VALUES (?,?,?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET cursor=excluded.cursor,next_seq=excluded.next_seq,complete=excluded.complete",
+        row.id, page.nextCursor, page.snapshot, end, page.totalItems, page.totalRecords, done ? 1 : 0);
+      this.update(row.id, done ? "importing" : "processing", done ? "Filing records into your vault" : `Receiving processed records (${Math.round(100 * end / Math.max(1, page.totalItems))}%)`, done ? "filing" : "transfer", done ? 0 : Math.round(100 * end / Math.max(1, page.totalItems)), 1000);
     });
   }
   private async fileBatch(row: JobRow) {

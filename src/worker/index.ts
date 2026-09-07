@@ -181,7 +181,7 @@ async function teamRoutes(
       const existing = await vault.importJob(importJob[1]!);
       if (!existing) return error(404, "Not found");
       const job = await vault.resumeImport(importJob[1]!);
-      return job ? json(job) : error(409, "This import has no paused records to resume");
+      return job ? json(job) : error(409, "This import has no saved progress to resume");
     }
     return error(405, "Method not allowed");
   }
