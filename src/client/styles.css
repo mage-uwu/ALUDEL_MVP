@@ -1069,6 +1069,17 @@ body {
 .vault-action { border: 0; background: none; padding: 8px 0; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
 .vault-action:disabled { color: var(--muted); opacity: .55; cursor: default; }
 .vault-pagination { font-size: 13px; color: var(--muted); }
+.history-record { padding: 18px; min-width: 0; }
+.history-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.history-heading h2 { margin: 0; font-size: 18px; }
+.history-heading a { color: var(--ink); font-size: 13px; }
+.history-fields { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.history-fields th, .history-fields td { padding: 12px 4px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.history-fields th { width: 38%; padding-right: 12px; font-weight: 650; }
+.history-text { margin: 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; tab-size: 4; }
+.history-record details { margin-top: 16px; }
+.history-record summary { cursor: pointer; font-size: 13px; }
+.history-notice { color: var(--muted); font-size: 13px; line-height: 1.6; }
 .task-title { margin: 0; font-size: 21px; font-weight: 800; padding: 4px; }
 .block.fill { gap: 8px; }
 .fill-label { margin: 0; padding: 0 4px; font-size: 16px; font-weight: 700; }

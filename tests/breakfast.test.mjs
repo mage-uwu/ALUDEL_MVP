@@ -12,6 +12,7 @@ const teamA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const teamB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const secret = "test-breakfast-secret";
 const hash = s => createHash("sha256").update(s).digest("base64url");
+const original = content => ({schemaVersion:1,mediaType:"application/json",content,sha256:createHash("sha256").update(content).digest("hex")});
 
 function fixture({ extra = false, badDate = false } = {}) {
   const nodes = [
@@ -105,11 +106,11 @@ test("graph mapping preserves typed values, dates, and identity without mixing u
   const blocks = a[0].payload.tasks.flatMap(t => t.blocks);
   const rec = a.find(i => i.kind === "record").payload;
   assert.equal(rec.performedAt, "2024-07-01T18:00:00.000Z");
-  assert.equal(rec.values[blocks.find(b => b.label === "Account ID").id], "00123");
-  assert.equal(rec.values[blocks.find(b => b.label === "Temperature").id], 38.5);
+  assert.equal(rec.history.receivedValues["block:account_id"], "00123");
+  assert.equal(rec.history.receivedValues["block:temperature"], 38.5);
   assert.deepEqual(blocks.find(b => b.label === "Outcome").options, ["PASS", "FAIL"]);
   assert.equal(rec.origin.externalId, "visit-1");
-  assert.equal((await planGraph(fixture({ badDate: true }), teamA, "job-e", "America/New_York")).filter(i => i.kind === "rejected").length, 2);
+  assert.equal((await planGraph(fixture({ badDate: true }), teamA, "job-e", "America/New_York")).filter(i => i.kind === "pending").length, 2);
   assert.equal(paperTime("1/17/2024", "2:30 PM", "America/New_York"), "2024-01-17T19:30:00.000Z");
   assert.equal(paperTime("2024-07-01", "00:30", "America/New_York"), "2024-07-01T04:30:00.000Z");
   assert.equal(paperTime("2/30/2024", "12:00", "America/New_York"), null);
@@ -204,8 +205,8 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     imported = await waitFor(id); assert.equal(imported.filed, 2); assert.equal(imported.rejected, 0);
     const reports = await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports`, { headers: { authorization: `Bearer aludel_${tokenA}` } });
     assert.equal((await reports.json()).length, 2);
-    const query = await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/vault/query`, { method: "POST", headers: { authorization: `Bearer aludel_${tokenA}`, "content-type": "application/json" }, body: JSON.stringify({ select: { agg: "sum", label: "Temperature" } }) });
-    assert.equal((await query.json()).groups[0].value, 77);
+    const query = await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/vault/query`, { method: "POST", headers: { authorization: `Bearer aludel_${tokenA}`, "content-type": "application/json" }, body: JSON.stringify({ select: { agg: "count" } }) });
+    assert.equal((await query.json()).groups[0].value, 2);
   });
   await t.test("a second upload reuses templates/sites and recognizes filed records", async () => {
     const res = await send(); const job = await res.json();
@@ -228,6 +229,9 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     const pending=await (await send()).json(),count=uploads;
     await waitFor(pending.id,["failed"]);
     graph=fixture({extra:true});mode="ok";
+    // These are new records. Reusing an archived ID with changed content is a
+    // separate manual-review case, not a successful duplicate import.
+    graph.nodes.filter(n=>n.kind==="record").forEach(n=>{n.properties.externalId += "-snapshot";});
     await call(teamA,`/${pending.id}/resume`,{method:"POST"});
     const completed=await waitFor(pending.id);assert.equal(completed.filed+completed.duplicates,2);assert.equal(completed.rejected,0);
     assert.deepEqual(pageCalls.filter(c=>c.jobId===`job-test-${count}`).map(c=>c.start),[0,2,2,0,2]);
@@ -247,7 +251,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
   await t.test("bad records are reported, not silently filed with invented dates", async () => {
     graph = fixture({ badDate: true });
     const job = await (await send()).json();
-    const done = await waitFor(job.id); assert.equal(done.rejected, 2); assert.equal(done.errors.length, 2);
+    const done = await waitFor(job.id); assert.equal(done.pending, 2); assert.equal(done.rejected, 0); assert.equal(done.errors.length, 2);
   });
   await t.test("jobs, records, and pending alarms survive a runtime restart", async () => {
     graph = fixture();mode="page-busy";
@@ -288,6 +292,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     const sourceSites=Array.from({length:4},(_,i)=>({kind:"site",payload:{id:`native-site-${i}`,sourceAddress:`${5100+i} Native Lane`,address:`${5100+i} Native Lane`,clientName:`Native Client ${i}`,place:null}}));
     const record=(i,siteId=sourceSites[i%4].payload.id)=>({kind:"record",payload:{id:`record:native-${i}`,templateId:"format-1",siteId,
       values:{notes:`Repaired valve ${i}`,pressure:42+i,outcome:"PASS"},
+      sourceDocument:original(JSON.stringify({report_id:`native-${i}`,notes:`  Repaired valve ${i}  `,pressure:42+i,outcome:"PASS",extra:null})),
       semantics:{schemaVersion:1,client:{...person,name:`Native Client ${i%4}`,emails:[`client${i%4}@example.com`]},employee:{...person,name:"Repair Worker"},user:person,date:{value:"2026-01-01",precision:"date"},serviceAddresses:[`${5100+i%4} Native Lane`]},
       origin:{file:"repairs.csv",externalId:`native-${i}`},siteBinding:{status:siteId?"bound":"manual_sort",reason:siteId?"corroborated_identity":"insufficient_corroboration"},sortDecision:{status:"learned"}
     }});
@@ -322,18 +327,19 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     const pending=await waitFor((await (await send()).json()).id);assert.equal(pending.pending,1);assert.equal(pending.rejected,0);
     const list=await call(teamA,`/${pending.id}/pending`).then(r=>r.json());assert.equal(list.length,1);
     let detail=await call(teamA,`/${pending.id}/pending/${list[0].seq}`).then(r=>r.json());
-    assert.equal(detail.source.values.notes,"Repaired valve 100");assert.equal(detail.semantics.date,null);
+    assert.equal(JSON.parse(detail.history.sourceDocument.content).notes,"  Repaired valve 100  ");assert.equal(detail.semantics.date,null);
     await mf.dispose();mf=new Miniflare(runtimeOptions);await mf.ready;db=await mf.getD1Database("DB");
-    detail=await call(teamA,`/${pending.id}/pending/${list[0].seq}`).then(r=>r.json());assert.equal(detail.source.values.notes,"Repaired valve 100");
+    detail=await call(teamA,`/${pending.id}/pending/${list[0].seq}`).then(r=>r.json());assert.equal(JSON.parse(detail.history.sourceDocument.content).notes,"  Repaired valve 100  ");
     assert.equal((await call(teamB,`/${pending.id}/pending/${list[0].seq}`,{},tokenB)).status,404);
     const filed=await call(teamA,`/${pending.id}/pending/${list[0].seq}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({siteId:sites[0].id,date:"2026-01-02"})});
     assert.equal(filed.status,200,await filed.clone().text());const result=await filed.json();
     const report=await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports/${result.id}`,{headers:{authorization:`Bearer aludel_${tokenA}`}}).then(r=>r.json());
     assert.equal(report.semantics.client.emails[0],"client0@example.com");assert.equal(report.semantics.date.value,"2026-01-02");
     assert.equal(report.templateId,template.id);assert.equal(report.siteId,sites[0].id);
+    assert.deepEqual(report.history.sourceDocument,manual.payload.sourceDocument);
     const invoiceTemplate={kind:"template",payload:{id:"invoice-format",formatIdentity:["record_type:invoice"],name:"Native service invoice",sortStatus:"learned",blocks:[{id:"amount",identity:"amount",label:"Total",valueKind:"number",options:[],unit:""}]}};
     largeItems=[invoiceTemplate,...sourceSites.map((s,i)=>({kind:"site",payload:{...s.payload,id:sites[i].id}})),...sites.map((s,i)=>{
-      const invoice=record(200+i,s.id);invoice.payload.templateId="invoice-format";invoice.payload.values={amount:"$1,234.50"};return invoice;
+      const invoice=record(200+i,s.id);invoice.payload.templateId="invoice-format";invoice.payload.values={amount:"$1,234.50"};invoice.payload.sourceDocument=original(JSON.stringify({invoice_id:`native-${200+i}`,amount:"$1,234.50"}));return invoice;
     })];
     const invoices=await waitFor((await (await send()).json()).id);assert.equal(invoices.filed,4);assert.equal(invoices.pending,0);
     assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM dispatches WHERE team_id=? AND site_id IN (?,?,?,?)").bind(teamA,...sites.map(s=>s.id)).first()).n,8);
@@ -391,7 +397,7 @@ test("resolved contract governs names and dates; display renaming cannot change 
   assert.equal(records(a)[0].performedAt,"2024-07-01");
   assert.equal(records(a)[0].byName,"");
   const unknown = await planGraph(resolvedFixture(null),teamA,"contract","America/New_York");
-  assert.equal(unknown.filter(i=>i.kind==="rejected").length,2);
+  assert.equal(unknown.filter(i=>i.kind==="pending").length,2);
   const badVersion=resolvedFixture();badVersion.nodes.find(n=>n.kind==="record").properties.semantics.schemaVersion=2;
   await assert.rejects(()=>planGraph(badVersion,teamA,"contract","America/New_York"),/semantics contract/);
 });

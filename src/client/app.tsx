@@ -18,6 +18,8 @@ import {
 } from "../shared/model";
 import { loadMaps, PLACE_FIELDS, toAludelPlace } from "./maps";
 import type { VaultCatalog, VaultFilters, VaultPage } from "../shared/vault";
+import type { ImportHistory } from "../shared/import-history";
+import { ImportedHistory } from "./import-history";
 
 interface Account {
   id: string;
@@ -1474,25 +1476,25 @@ function VaultScreen({ teamId, head }: { teamId: string; head: React.ReactNode }
     <form className="card glass-frosted vault-filters" aria-label="Filter completed paperwork" onSubmit={e => e.preventDefault()}>
       <label className="field vault-wide">
         <span className="section-label">Template</span>
-        <select className="vault-input" value={filters.template} onChange={e => change("template", e.target.value)} disabled={!catalog}>
+        <select className="vault-input" aria-label="Template" value={filters.template} onChange={e => change("template", e.target.value)} disabled={!catalog}>
           <option value="">All templates</option>
           {catalog?.templates.map(t => <option key={t.id} value={t.id}>{t.name} ({t.reports})</option>)}
         </select>
       </label>
       <label className="field vault-wide">
         <span className="section-label">Site</span>
-        <select className="vault-input" value={filters.site} onChange={e => change("site", e.target.value)} disabled={!catalog}>
+        <select className="vault-input" aria-label="Site" value={filters.site} onChange={e => change("site", e.target.value)} disabled={!catalog}>
           <option value="">All sites</option>
           {catalog?.sites.map(s => <option key={s.id} value={s.id}>{s.name}{s.address ? ` · ${s.address}` : siteNames.get(s.name)! > 1 ? ` · ${s.id.slice(-6)}` : ""} ({s.reports})</option>)}
         </select>
       </label>
       <label className="field">
         <span className="section-label">From date</span>
-        <input className="vault-input" type="date" value={filters.from} onChange={e => change("from", e.target.value)} />
+        <input className="vault-input" aria-label="From date" type="date" value={filters.from} onChange={e => change("from", e.target.value)} />
       </label>
       <label className="field">
         <span className="section-label">To date</span>
-        <input className="vault-input" type="date" value={filters.to} onChange={e => change("to", e.target.value)} />
+        <input className="vault-input" aria-label="To date" type="date" value={filters.to} onChange={e => change("to", e.target.value)} />
       </label>
       <p className="vault-date-note vault-wide">Work date · {filters.timezone.replaceAll("_", " ")} · both dates included</p>
       <div className="vault-actions vault-wide">
@@ -1620,7 +1622,7 @@ function FillScreen({ teamId, dispatch, onBack }: { teamId: string; dispatch: Di
 
 /** One filed report, read back exactly as it was recorded. */
 function ReportScreen({ teamId, id, onBack }: { teamId: string; id: string; onBack: () => void }) {
-  const [report, setReport] = useState<(ReportMeta & { doc: { tasks: { id: string; name: string; blocks: { id: string; kind: BlockKind; label: string; unit: string; value: string | number }[] }[] } }) | null>(null);
+  const [report, setReport] = useState<(ReportMeta & { history?: ImportHistory | null; doc: { tasks: { id: string; name: string; blocks: { id: string; kind: BlockKind; label: string; unit: string; value: string | number }[] }[] } }) | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     api<typeof report>(`/teams/${teamId}/reports/${id}`).then(setReport, (e) => setError(e.message));
@@ -1642,7 +1644,9 @@ function ReportScreen({ teamId, id, onBack }: { teamId: string; id: string; onBa
         </div>
         <span className="version">v{report.templateVersion}</span>
       </header>
-      {report.doc.tasks.map((task) => (
+      {report.history && <ImportedHistory history={report.history} download={`/api/teams/${teamId}/reports/${id}/source`} />}
+      {report.origin && !report.history && <p className="history-notice">This older import retained a reconstructed report, not the original source. Reimport the same document to recover its source when its recorded fingerprint matches.</p>}
+      {!report.history && report.doc.tasks.map((task) => (
         <section key={task.id} className="card glass-frosted task">
           <p className="task-title">{task.name}</p>
           {task.blocks.map((b) => (

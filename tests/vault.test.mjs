@@ -148,7 +148,7 @@ test("Vault browses completed paperwork through the real Worker, D1 and tenant S
     assert.equal((await browse({ site: siteA, template: templateA })).total, 70);
     const report = await ok(`/reports/${ids.get("same-time-0")}`);
     assert.equal(report.templateName, "Repair report");
-    assert.equal(report.doc.tasks[0].blocks[0].value, "same-time-0");
+    assert.equal(report.history.receivedValues[block], "same-time-0");
   });
   await t.test("history, catalog and report contents remain isolated by team", async () => {
     assert.equal((await call("/vault/catalog", { team: teamB })).status, 404);

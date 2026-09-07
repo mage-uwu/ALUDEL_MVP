@@ -80,7 +80,19 @@ to the selected filters. These browsing routes do not change the existing `/repo
 
 Every filed report is append-only, in the team's own SQLite-backed Durable Object
 (`Vault`, keyed by team id). A report is the record: site, template and version, who, when, the
-filled document and its SHA-256. Each filled block also becomes one typed **fact** row (number in
+filled document or archived source and its SHA-256. Imported history is stored independently
+of the generated template. Vault displays original source records and offers a byte-preserving
+download through `GET /api/teams/:id/reports/:reportId/source`. CSV headers, duplicate columns,
+empty cells, spacing and multiline notes survive; JSON retains its original record text, including
+number spelling, nested values and duplicate keys. Source text is rendered as text, never active HTML.
+
+An older producer that provides only values gets an explicitly labelled **Received data** view.
+Pre-existing reconstructions are identified as such. Reimport can attach a missing original when
+the recorded source fingerprint matches; a reused ID with different archived content requires review.
+Original content is never replaced by subsequent imports. Template/site/date filters operate on
+classification metadata and do not rewrite the source.
+
+Each block filled in Field also becomes one typed **fact** row (number in
 `num`, text and the pressed key in `text`, plus label, kind, unit and time), so a labelled block is
 a series across the whole stack and the stack is queryable in one shape:
 
@@ -143,17 +155,17 @@ the team's worksite IDs. Records use the source `externalId` for deduplication.
 Existing templates/sites are never overwritten. Address-only sites retain their
 source address for the place picker. Identifier fields and constants stay text,
 choices keep their keys, and dates retain their resolved precision. Native records
-without a site or valid date, or with unsupported field values, remain complete
-in the team's manual review queue. Photo fields require further review before filing.
+without a site or valid date remain complete in the team's manual review queue.
+Historical field values do not have to fit the generated template.
 
 Each transfer response is bounded to 1 MiB and 256 items; total result size is
 not subject to the former 16 MiB graph cap. The queue holds only the current
 page and its referenced catalog mappings in Worker memory. Learned field IDs,
 types, choice options, client/site identities, resolved dates and source origins
-use the shared resolved contract. Individual staged records and templates retain
-their 120 KiB limit; an oversized native source row pauses transfer explicitly.
+use the shared resolved contract. Individual staged records and templates have a
+960 KiB limit; an oversized native source row pauses transfer explicitly.
 ALUDEL retains job checkpoints, imported field payloads, unresolved documents and
-filed reports; original upload files remain in Breakfast. TRANSMUTE is disabled
+filed reports, including their source records; whole upload files remain in Breakfast. TRANSMUTE is disabled
 for these imports, and normal jobs bypass GraphTM training and graph expansion.
 
 Deploy Breakfast's paginated import endpoint before this ALUDEL update. Existing
@@ -174,13 +186,16 @@ Authenticated team routes:
 `npm test` runs the graph mapper and the actual Worker, D1, and SQLite Durable
 Objects in Miniflare against a local fake Breakfast server. It covers auth,
 cross-team access, multipart forwarding, progress recovery, duplicate imports,
-typed facts, uncertain uploads and persisted jobs. Transfer regressions cover
+original-source fidelity, uncertain uploads and persisted jobs. Transfer regressions cover
 results above 16 MiB, cursor recovery across restarts, changed snapshots, manifest
 count mismatches, oversized chunked pages, and recovery of prior size failures.
 The tests do not call production.
 
-A sidecar that reads old paperwork files it into the same vault through the same gate, so an
-imported report is queryable exactly like one filed from a phone. It authenticates with an
+A sidecar that reads old paperwork archives it in the same Vault, organized by template, site
+and work date. Imported history does not pass through form validation and does not manufacture
+template-derived fact rows. Numeric/field fact queries apply to Field submissions and existing
+legacy fact rows; report counts and template/site/date browsing include both kinds of history.
+The sidecar authenticates with an
 **integration token** (Members → Integrations; shown once, stored hashed, revocable) which acts as a
 *member* of one team and nothing else: no `/me`, no chats, no other team, no admin routes.
 
@@ -191,16 +206,20 @@ Content-Type: application/json
 ```
 
 ```jsonc
-{ "records": [                                   // 1–200 per call
+{ "records": [                                   // 1–200 per call; at most 1 MiB total
   { "siteId": "<uuid>",                          // an existing site of the team (resolve addresses before you get here)
     "templateId": "<uuid>",                      // an existing template; create it first via POST /templates + PUT if the TM minted a new proto-type
     "performedAt": "2024-01-17T14:00:00Z",       // when the work was done, ISO 8601, in the past
     "byName": "R. Ortiz",                        // optional: the technician named on the document; else the token's name
-    "values": {                                  // block id → value, keyed by the template's block ids (GET /templates/:id)
-      "<block id>": 38.5,                        // number blocks: a number (or a numeric string)
-      "<block id>": "FAIL",                      // buttons blocks: exactly one of the block's options
-      "<block id>": "Leak at the valve"          // text blocks: text, ≤ 4000 chars
-    },                                           // photo blocks, unknown ids and wrong kinds are dropped; nothing filled → error
+    "history": {
+      "schemaVersion": 1,
+      "sourceDocument": {
+        "schemaVersion": 1,
+        "mediaType": "application/json",        // also text/csv, text/tab-separated-values, text/plain, text/markdown
+        "content": "{\"notes\":\"  Leak at the valve  \"}",
+        "sha256": "<SHA-256 hex of the exact UTF-8 content>"
+      }                                          // CSV/TSV also include the original delimiter
+    },                                           // no template field mapping, coercion, trimming, or truncation
     "origin": {                                  // provenance — required
       "file": "2024-jan.pdf",                    // required
       "sha256": "<64 hex>",                      // recommended: with page, makes the record idempotent
@@ -215,6 +234,12 @@ one entry per record in order. A record whose `externalId`, or `sha256` + `page`
 comes back as a duplicate with the earlier id, so re-running a batch never files twice. A dispatch
 for the site and template is made on the spot if the app never dispatched it. Imported reports carry
 their `origin` and show as *imported* in Vault.
+
+Sources are checked against their SHA-256 before filing. An individual history record is bounded
+to 960 KiB; oversized records fail explicitly without dropping content. Legacy API clients may
+still send a `values` object in place of `history`; every supplied value is preserved in
+`history.receivedValues` and is not described as an original source. Report detail responses add
+`history`; imported reports have an empty `doc.tasks`, while Field reports retain their filled doc.
 
 **From the sidecar's graph export.** `tools/import-graph.mjs` reads the sidecar's graph
 (record → fact → block → template, plus site and employee; classifier nodes are ignored) and

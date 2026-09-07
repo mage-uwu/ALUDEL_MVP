@@ -15,7 +15,7 @@ import { applyPlan, configured, optimize, readInput } from "./optimize";
 import { breakfastKey } from "./breakfast-api";
 import { ask, CHAT, storeFor, type ChatStore } from "./chat";
 export { ChatStore } from "./chat";
-import { vaultFor, type Vault } from "./vault";
+import { vaultFor, type Vault, type Report } from "./vault";
 export { Vault } from "./vault";
 import {
   currentUser,
@@ -82,10 +82,10 @@ const INVITE_TTL_S = 7 * 24 * 3600;
 const UUID = "[0-9a-fA-F-]{36}";
 const nowIso = () => new Date().toISOString();
 
-async function readBody(req: Request): Promise<Record<string, unknown> | null> {
-  if (Number(req.headers.get("content-length") ?? 0) > LIMITS.body) return null;
+async function readBody(req: Request, max: number = LIMITS.body): Promise<Record<string, unknown> | null> {
+  if (Number(req.headers.get("content-length") ?? 0) > max) return null;
   const text = await req.text();
-  if (text.length > LIMITS.body) return null;
+  if (new TextEncoder().encode(text).byteLength > max) return null;
   try {
     const v = JSON.parse(text);
     return typeof v === "object" && v !== null && !Array.isArray(v) ? v : null;
@@ -640,9 +640,9 @@ async function teamRoutes(
 
   // ——— import: old documents, already read into records, filed like field work ———
   if (rest === "/import" && req.method === "POST") {
-    const body = await readBody(req);
-    const records = Array.isArray(body?.records) ? body.records.slice(0, 200) : [];
-    if (!records.length) return error(422, "records: 1–200 of them");
+    const body = await readBody(req, 1024 * 1024);
+    const records = Array.isArray(body?.records) ? body.records : [];
+    if (!records.length || records.length > 200) return error(422, "records: 1–200 of them, within 1 MiB");
     return json(await fileImportRecords(env, teamId, user, records, vaultFor(env, teamId)));
   }
 
@@ -731,8 +731,21 @@ async function teamRoutes(
   }
   const report = rest.match(new RegExp(`^/reports/(${UUID})$`));
   if (report && req.method === "GET") {
-    const found = await vaultFor(env, teamId).get(report[1]!);
-    return found ? json(found) : error(404, "Not found");
+    const found = await vaultFor(env, teamId).reportJson(report[1]!);
+    return found ? json(JSON.parse(found)) : error(404, "Not found");
+  }
+  const sourceRecord = rest.match(new RegExp(`^/reports/(${UUID})/source$`));
+  if (sourceRecord && req.method === "GET") {
+    const saved = await vaultFor(env, teamId).reportJson(sourceRecord[1]!);
+    const found: Report | null = saved ? JSON.parse(saved) : null;
+    const source = found?.history?.sourceDocument;
+    if (!source) return error(404, "Original source record is not available");
+    const ext = ({ "text/csv": "csv", "text/tab-separated-values": "tsv", "application/json": "json", "text/plain": "txt", "text/markdown": "md" })[source.mediaType];
+    return new Response(source.content, { headers: {
+      "content-type": `${source.mediaType}; charset=utf-8`, "cache-control": "no-store",
+      "content-disposition": `attachment; filename="source-${found!.id}.${ext}"`,
+      "x-content-type-options": "nosniff",
+    } });
   }
   if (rest === "/vault/query" && req.method === "POST") {
     const q = normalizeQuery(await readBody(req));
