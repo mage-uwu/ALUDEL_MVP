@@ -6,6 +6,11 @@ export class BreakfastError extends Error {
   constructor(message: string, readonly status = 502, readonly retryAfter: string | null = null) { super(message); }
 }
 
+/** Both runtime names resolve identically for status, intake, and upstream calls. */
+export function breakfastKey(env: Pick<Env, "BREAKFAST_KEY" | "BFAST_API_KEY">): string {
+  return env.BREAKFAST_KEY?.trim() || env.BFAST_API_KEY?.trim() || "";
+}
+
 /** Bounded streaming also covers clients that omit Content-Length. */
 export function limitStream(body: ReadableStream<Uint8Array>, max: number): ReadableStream<Uint8Array> {
   let bytes = 0;
@@ -19,12 +24,13 @@ export function limitStream(body: ReadableStream<Uint8Array>, max: number): Read
 }
 
 export async function breakfast(env: Env, path: string, init: RequestInit = {}, timeout = 20_000): Promise<Record<string, unknown>> {
-  if (!env.BFAST_API_KEY) throw new BreakfastError("Document import is not configured", 503);
+  const key = breakfastKey(env);
+  if (!key) throw new BreakfastError("Document import is not configured", 503);
   const base = env.BFAST_ENDPOINT || ORIGIN;
   // This optional test hook cannot redirect the production key to arbitrary hosts.
   if (base !== ORIGIN && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(base)) throw new BreakfastError("Invalid import configuration", 503);
   const headers = new Headers(init.headers);
-  headers.set("authorization", `Bearer ${env.BFAST_API_KEY}`);
+  headers.set("authorization", `Bearer ${key}`);
   headers.set("accept", "application/json");
   const response = await fetch(`${base}${path}`, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(timeout) });
   if (!response.ok) {

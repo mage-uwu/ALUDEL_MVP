@@ -12,6 +12,7 @@ import {
   type Role,
 } from "../shared/model";
 import { applyPlan, configured, optimize, readInput } from "./optimize";
+import { breakfastKey } from "./breakfast-api";
 import { ask, CHAT, storeFor, type ChatStore } from "./chat";
 export { ChatStore } from "./chat";
 import { vaultFor, type Vault } from "./vault";
@@ -55,6 +56,8 @@ export interface Env {
   XAI_API_KEY?: string;
   XAI_ENDPOINT?: string;
   /** Shared service credential; never exposed to clients. */
+  BREAKFAST_KEY?: string;
+  /** Legacy runtime name, used when BREAKFAST_KEY is empty or absent. */
   BFAST_API_KEY?: string;
   /** Local integration-test stand-in; production uses the fixed Breakfast origin. */
   BFAST_ENDPOINT?: string;
@@ -154,7 +157,7 @@ async function teamRoutes(
   // ——— document imports: authentication and team ownership precede every DO call ———
   if (rest === "/breakfast/jobs") {
     const vault = vaultFor(env, teamId);
-    if (req.method === "GET") return json({ configured: Boolean(env.BFAST_API_KEY), jobs: await vault.importJobs() });
+    if (req.method === "GET") return json({ configured: Boolean(breakfastKey(env)), jobs: await vault.importJobs() });
     if (req.method === "POST") {
       const incoming = new URL(req.url);
       const target = new URL("https://vault.internal/breakfast/jobs");

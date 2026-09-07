@@ -95,7 +95,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 120
   const worker = await build({ entryPoints: ["src/worker/index.ts"], bundle: true, write: false, format: "esm", platform: "neutral", external: ["cloudflare:workers"] });
   const persist = await mkdtemp(join(tmpdir(), "aludel-import-test-"));
   const runtimeOptions = convertV4MiniflareOptions({ resourcePersistencePath: persist, name: "aludel-test", modules: true, script: worker.outputFiles[0].text, compatibilityDate: "2025-08-01",
-    bindings: { BFAST_API_KEY: secret, BFAST_ENDPOINT: `http://127.0.0.1:${upstream.address().port}` },
+    bindings: { BREAKFAST_KEY: secret, BFAST_ENDPOINT: `http://127.0.0.1:${upstream.address().port}` },
     d1Databases: { DB: "test-db" }, durableObjects: { VAULT: { className: "Vault", useSQLite: true }, CHATS: { className: "ChatStore", useSQLite: true } },
   });
   let mf = new Miniflare(runtimeOptions);
@@ -134,7 +134,8 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 120
     assert.equal((await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/breakfast/jobs`)).status, 401);
     assert.equal((await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/breakfast/jobs`, { method: "POST", headers: { origin: "https://attacker.example" } })).status, 403);
     assert.equal((await call(teamB)).status, 404);
-    const res = await call(teamB, "", {}, tokenB); assert.equal(res.status, 200); assert.deepEqual((await res.json()).jobs, []);
+    const res = await call(teamB, "", {}, tokenB); assert.equal(res.status, 200);
+    const config = await res.json(); assert.equal(config.configured, true); assert.deepEqual(config.jobs, []);
   });
   let imported;
   await t.test("upload, replay suppression, transient polling recovery, and automatic filing", async () => {
@@ -180,6 +181,31 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 120
     assert.equal(job.state, "complete", JSON.stringify(job)); assert.equal(job.filed, 2);
     const completed = await waitFor(pending.id); assert.equal(completed.duplicates, 2);
   });
+});
+
+test("Breakfast runtime key names authenticate consistently and missing keys make no upstream request", async t => {
+  const built = await build({ entryPoints: ["src/worker/breakfast-api.ts"], bundle: true, write: false, format: "esm", platform: "neutral" });
+  const { breakfast } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push({ url, authorization: init.headers.get("authorization") });
+    return Response.json({ ready: true });
+  });
+  for (const [env, expected] of [
+    [{ BREAKFAST_KEY: "new-secret" }, "new-secret"],
+    [{ BFAST_API_KEY: "legacy-secret" }, "legacy-secret"],
+    [{ BREAKFAST_KEY: "preferred-secret", BFAST_API_KEY: "old-secret" }, "preferred-secret"],
+    [{ BREAKFAST_KEY: "  ", BFAST_API_KEY: " legacy-secret\n" }, "legacy-secret"],
+  ]) {
+    assert.deepEqual(await breakfast(env, "/v1/pipeline/jobs/job-test"), { ready: true });
+    assert.equal(requests.at(-1).authorization, `Bearer ${expected}`);
+    assert.equal(new URL(requests.at(-1).url).origin, "https://breakfast-tm-container.lafayettejcompton.workers.dev");
+  }
+  const count = requests.length;
+  for (const env of [{}, { BREAKFAST_KEY: " ", BFAST_API_KEY: "\n" }]) {
+    await assert.rejects(() => breakfast(env, "/v1/pipeline/jobs/job-test"), error => error.status === 503);
+  }
+  assert.equal(requests.length, count);
 });
 
 function resolvedFixture(date = {value:"2024-07-01",precision:"date"}) {

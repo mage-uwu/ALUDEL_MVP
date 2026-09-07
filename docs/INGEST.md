@@ -225,7 +225,7 @@ remains the join.
 ## Built-in Breakfast connection
 
 The Imports screen now runs this flow directly. See the README for the team
-routes and the `BFAST_API_KEY` secret. The Worker forwards uploads to the fixed
+routes and the `BREAKFAST_KEY` secret (`BFAST_API_KEY` is also accepted). The Worker forwards uploads to the fixed
 Breakfast origin and the team's Vault stores jobs, progress and staged records.
 Durable alarms poll and file in bounded batches without an open browser.
 

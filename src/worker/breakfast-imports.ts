@@ -1,6 +1,6 @@
 import { IMPORT_MAX_BYTES, type ImportJob } from "../shared/breakfast";
 import { normalizePlace, normalizeTemplate } from "../shared/model";
-import { breakfast, BreakfastError, limitStream, uploadHeaders } from "./breakfast-api";
+import { breakfast, breakfastKey, BreakfastError, limitStream, uploadHeaders } from "./breakfast-api";
 import { planGraph, type ImportItem } from "./graph-import";
 import { fileImportRecords, type ImportVault } from "./import-records";
 import type { Env } from "./index";
@@ -59,7 +59,8 @@ export class BreakfastImports {
   }
   async start(req: Request): Promise<Response> {
     try {
-      if (!this.env.BFAST_API_KEY) return json({ error: "Document import is not configured. Ask an administrator to connect it." }, 503);
+      const key = breakfastKey(this.env);
+      if (!key) return json({ error: "Document import is not configured. Ask an administrator to connect it." }, 503);
       const headers = uploadHeaders(req), url = new URL(req.url);
       const id = req.headers.get("x-import-id") ?? "";
       if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "A UUID X-Import-Id is required" }, 422);
@@ -80,7 +81,7 @@ export class BreakfastImports {
         this.sql.exec("UPDATE breakfast_jobs SET upstream_id = ? WHERE id = ?", accepted.jobId, id);
         this.update(id, "processing", "Documents accepted", "queued", 0);
       } catch (e) {
-        console.error("breakfast_upload_failed", { jobId: id, detail: (e instanceof Error ? e.message : "Unknown upload error").replaceAll(this.env.BFAST_API_KEY, "[REDACTED]").slice(0, 300) });
+        console.error("breakfast_upload_failed", { jobId: id, detail: (e instanceof Error ? e.message : "Unknown upload error").replaceAll(key, "[REDACTED]").slice(0, 300) });
         // A received 4xx is a rejected request. A timeout/5xx may have accepted it.
         const rejected = e instanceof BreakfastError && e.status >= 400 && e.status < 500;
         this.update(id, rejected ? "failed" : "uncertain", rejected ? e.message : "Upload confirmation was lost. This upload will not be automatically submitted again.");

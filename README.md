@@ -92,12 +92,15 @@ need text extraction/OCR before upload. Processing and filing continue in the
 team's existing Vault Durable Object after the page closes. Recent imports show
 progress, filed/duplicate/rejected counts and the first 50 rejected records.
 
-Configure the ALUDEL Worker with **the same secret value** as Breakfast's
-`BFAST_API_KEY`:
+Configure the ALUDEL Worker's `BREAKFAST_KEY` runtime secret with **the same
+secret value** as Breakfast's `BFAST_API_KEY`:
 
 ```sh
-npx wrangler secret put BFAST_API_KEY
+npx wrangler secret put BREAKFAST_KEY
 ```
+
+The legacy ALUDEL name `BFAST_API_KEY` is also accepted. If both are set,
+`BREAKFAST_KEY` takes precedence. A blank value falls back to the legacy name.
 
 The production service is
 `https://breakfast-tm-container.lafayettejcompton.workers.dev`. Credentials remain
