@@ -8,6 +8,7 @@ import { QUERY_LIMITS, type BlockKind, type Filled, type Origin, type VaultQuery
 import type { Env } from "./index";
 import type { BreakfastSemantics } from "../shared/breakfast";
 import { BreakfastImports } from "./breakfast-imports";
+import { PdfStore } from "./pdf-store";
 import type { VaultCatalog, VaultPage } from "../shared/vault";
 import { vaultCursor, vaultWhere, type VaultBrowse } from "./vault-browse";
 import type { ImportHistory } from "../shared/import-history";
@@ -126,10 +127,12 @@ export function compile(q: VaultQuery): { sql: string; params: (string | number)
 export class Vault extends DurableObject<Env> {
   private sql: SqlStorage;
   private imports: BreakfastImports;
+  private pdfs: PdfStore;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.pdfs = new PdfStore(this.sql);
     this.imports = new BreakfastImports(ctx, env, this);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS reports (
@@ -180,7 +183,10 @@ export class Vault extends DurableObject<Env> {
   resolvePendingImport(id: string, seq: number, siteId: string, date?: string) { return this.imports.resolvePending(id,seq,siteId,date); }
 
   /** No await between the duplicate lookup and insert: atomic in one DO turn. */
-  addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null, history?: ImportHistory): { id: string; duplicate?: true; error?: string } {
+  async addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null, history?: ImportHistory): Promise<{ id: string; duplicate?: true; error?: string }> {
+    if(history?.sourceDocument?.mediaType === "application/pdf") {
+      try {await this.pdfs.verify(history.sourceDocument);} catch(e) {return {id:meta.id,error:(e as Error).message};}
+    }
     const seen = key ? this.byOrigin(key) : null;
     if (seen) {
       if (history) {
@@ -267,6 +273,16 @@ export class Vault extends DurableObject<Env> {
     const row = this.sql.exec<Row & { doc: string; history: string | null }>(`SELECT ${META}, r.doc, h.content AS history
       FROM reports r LEFT JOIN report_history h ON h.report_id = r.id WHERE r.id = ?`, id).toArray()[0];
     return row ? JSON.stringify({ ...withOrigin(row), doc: JSON.parse(row.doc) as Filled, history: row.history ? JSON.parse(row.history) as ImportHistory : null } satisfies Report) : null;
+  }
+
+  async originalResponse(id: string, range: string | null, inline: boolean, pendingJob?: string): Promise<Response> {
+    const saved = pendingJob ? this.imports.pendingDocument(pendingJob,Number(id)) : JSON.parse(this.reportJson(id) ?? "null") as Report | null;
+    const source = (saved?.history as ImportHistory | undefined)?.sourceDocument;
+    if(!source)return new Response("Original source record is not available",{status:404});
+    if(source.mediaType === "application/pdf")return this.pdfs.response(source,range,inline);
+    const ext=({"text/csv":"csv","text/tab-separated-values":"tsv","application/json":"json","text/plain":"txt","text/markdown":"md"})[source.mediaType];
+    return new Response(source.content,{headers:{"content-type":`${source.mediaType}; charset=utf-8`,"cache-control":"no-store",
+      "content-disposition":`attachment; filename="source-${id}.${ext}"`,"x-content-type-options":"nosniff"}});
   }
 
   query(q: VaultQuery): { rows: ReportMeta[] } | { groups: { key: string; name: string; value: number | null; n: number }[] } {

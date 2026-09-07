@@ -1,10 +1,11 @@
 /** Historical content is independent of the generated template and its labels. */
 export interface SourceDocument {
   schemaVersion: 1;
-  mediaType: "text/csv" | "text/tab-separated-values" | "application/json" | "text/plain" | "text/markdown";
+  mediaType: "text/csv" | "text/tab-separated-values" | "application/json" | "text/plain" | "text/markdown" | "application/pdf";
   content: string;
   sha256: string;
   delimiter?: string;
+  pdf?: { fileName: string; byteLength: number; pages: number; ocrPages: number[]; reviewReason?: string };
 }
 
 export type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
@@ -28,12 +29,36 @@ export async function readImportHistory(value: unknown): Promise<ImportHistory> 
   if (value.sourceDocument !== undefined) {
     const s = value.sourceDocument;
     if (!object(s) || s.schemaVersion !== 1 || typeof s.content !== "string" || typeof s.sha256 !== "string"
-      || !/^[a-f0-9]{64}$/.test(s.sha256) || !["text/csv", "text/tab-separated-values", "application/json", "text/plain", "text/markdown"].includes(String(s.mediaType))
+      || !/^[a-f0-9]{64}$/.test(s.sha256) || !["text/csv", "text/tab-separated-values", "application/json", "text/plain", "text/markdown", "application/pdf"].includes(String(s.mediaType))
       || (s.delimiter !== undefined && ![",", ";", "\t", "|"].includes(String(s.delimiter)))) throw new Error("Invalid source document contract");
-    if (await sha256(s.content) !== s.sha256) throw new Error("Source document checksum mismatch; no record was filed");
+    if (s.mediaType === "application/pdf") {
+      const p=s.pdf;
+      if (s.content !== "" || s.binary !== undefined || !object(p) || typeof p.fileName !== "string" || p.fileName.length > 4096
+        || !Number.isSafeInteger(p.byteLength) || Number(p.byteLength) < 1 || Number(p.byteLength) > PDF_MAX_BYTES
+        || !Number.isSafeInteger(p.pages) || Number(p.pages) < 0 || !Array.isArray(p.ocrPages)
+        || !p.ocrPages.every(n=>Number.isSafeInteger(n) && n>=1 && n<=Number(p.pages))
+        || (p.reviewReason !== undefined && (typeof p.reviewReason !== "string" || p.reviewReason.length>1000))) throw new Error("Invalid original PDF metadata");
+      // Binary integrity is checked against the complete, tenant-owned chunk store before filing.
+    } else if (s.pdf !== undefined || await sha256(s.content) !== s.sha256) throw new Error("Source document checksum mismatch; no record was filed");
   }
   if (value.receivedValues !== undefined && !object(value.receivedValues)) throw new Error("Invalid received historical values");
   return value as unknown as ImportHistory;
+}
+
+export const PDF_CHUNK_BYTES = 384 * 1024;
+export const PDF_MAX_BYTES = 256 * 1024 * 1024;
+export interface SourceChunk { id: string; part: number; totalBytes: number; sha256: string; data: string }
+export async function readSourceChunk(value: Record<string, unknown>): Promise<{ chunk: SourceChunk; bytes: Uint8Array }> {
+  const c=value as unknown as SourceChunk;
+  if (!/^[a-f0-9]{64}$/.test(c.id) || !/^[a-f0-9]{64}$/.test(c.sha256) || !Number.isSafeInteger(c.part) || c.part<0
+    || !Number.isSafeInteger(c.totalBytes) || c.totalBytes<1 || c.totalBytes>PDF_MAX_BYTES
+    || c.part>=Math.ceil(c.totalBytes/PDF_CHUNK_BYTES) || typeof c.data!=="string" || c.data.length>PDF_CHUNK_BYTES/3*4) throw new Error("Invalid PDF source chunk");
+  let raw: string; try {raw=atob(c.data);} catch {throw new Error("Invalid PDF source encoding");}
+  if (btoa(raw)!==c.data || raw.length!==Math.min(PDF_CHUNK_BYTES,c.totalBytes-c.part*PDF_CHUNK_BYTES)) throw new Error("Invalid PDF source chunk length");
+  const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));
+  const digest=[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))].map(b=>b.toString(16).padStart(2,"0")).join("");
+  if(digest!==c.sha256)throw new Error("PDF source chunk checksum mismatch");
+  return {chunk:c,bytes};
 }
 
 /** Parse only for display. The saved CSV text remains the authority and download. */

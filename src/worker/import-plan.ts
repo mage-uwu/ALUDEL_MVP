@@ -63,8 +63,9 @@ export function mapRecord(source: Props, template: TemplateMapping | undefined, 
     || paperTime(source.submittedOn, "", timezone) || paperTime(source.performedAt, "", timezone);
   const rawOrigin = (source.origin ?? {}) as Props;
   const externalId = text(rawOrigin.externalId) || text(source.id);
-  const problem = !template ? "No template" : !siteId ? "No site" : !when ? "No valid date of service"
-    : externalId.length > 120 ? "Source report ID exceeds 120 characters" : null;
+  const pdf = (source.sourceDocument as ImportHistory["sourceDocument"])?.pdf;
+  const problem = pdf?.reviewReason || (!template ? "No template" : !siteId ? "No site" : !when ? "No valid date of service"
+    : externalId.length > 120 ? "Source report ID exceeds 120 characters" : null);
   const history: ImportHistory = source.sourceDocument
     ? { schemaVersion: 1, sourceDocument: source.sourceDocument as ImportHistory["sourceDocument"] }
     : { schemaVersion: 1, receivedValues: source.values as ImportHistory["receivedValues"] };

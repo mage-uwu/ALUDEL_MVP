@@ -111,9 +111,11 @@ team's object, so it cannot be injected and cannot cross teams; it is the tool a
 ### Importing old documents
 
 Open **Imports** in the section menu to send documents directly to Breakfast.
-Choose ZIP, CSV/TSV, JSON/JSONL, text or Markdown files (64 MiB including multipart
-framing) and the timezone used on the paperwork. PDFs, DOCX and scanned images
-need text extraction/OCR before upload. Processing and filing continue in the
+Choose PDFs, ZIP, CSV/TSV, JSON/JSONL, text or Markdown files (64 MiB including multipart
+framing) and the timezone used on the paperwork. Breakfast extracts embedded PDF text
+and OCRs scanned pages before the existing format/site pipeline. Each PDF stays one
+document with all its pages. DOCX and standalone images still need conversion first.
+Processing and filing continue in the
 team's existing Vault Durable Object after the page closes. Recent imports show
 progress, filed/duplicate/pending/rejected counts and documents awaiting review.
 
@@ -165,7 +167,8 @@ types, choice options, client/site identities, resolved dates and source origins
 use the shared resolved contract. Individual staged records and templates have a
 960 KiB limit; an oversized native source row pauses transfer explicitly.
 ALUDEL retains job checkpoints, imported field payloads, unresolved documents and
-filed reports, including their source records; whole upload files remain in Breakfast. TRANSMUTE is disabled
+filed reports, including original PDFs and text source records. Whole ZIP/multipart upload
+containers remain in Breakfast. TRANSMUTE is disabled
 for these imports, and normal jobs bypass GraphTM training and graph expansion.
 
 Deploy Breakfast's paginated import endpoint before this ALUDEL update. Existing
@@ -182,6 +185,22 @@ Authenticated team routes:
 | `POST /api/teams/:id/breakfast/jobs?timezone=...&name=...` | Multipart upload; requires UUID `X-Import-Id`; returns 202 with the local job. |
 | `GET /api/teams/:id/breakfast/jobs/:jobId` | Progress, counts and up to 50 record errors. |
 | `POST /api/teams/:id/breakfast/jobs/:jobId/resume` | Resume result transfer or filing from saved progress, without another Breakfast upload. |
+| `GET /api/teams/:id/reports/:reportId/source` | Download the original; PDFs support byte ranges and `?inline=1`. |
+| `GET /api/teams/:id/breakfast/jobs/:jobId/pending/:seq/source` | View/download the original while a document awaits manual filing. |
+
+Original PDFs use the tenant's existing SQLite Vault, with no new bucket or credentials.
+The producer sends 384 KiB binary chunks inside bounded `source_chunk` import items.
+The queue validates each chunk, stages bytes once outside report JSON, and verifies the
+entire file using a streaming SHA-256 before filing or serving it. Restarts/resumes reuse
+staged chunks; reused hashes with conflicting bytes fail. PDFs up to the existing
+256 MiB archive-member bound do not encounter the 960 KiB historical-row limit.
+Uncertain extraction remains visible in manual review with the preserved PDF available.
+
+Vault renders the original with a pinned PDF.js build, page navigation and zoom; source
+downloads preserve every byte. Rendering uses canvas only, with no PDF scripts or active
+form editing. PDF.js loads on demand; worker code, fonts, CMaps and decoders are served
+from Aludel's own static assets. `npm run build` copies those version-matched resources.
+PDF rendering is independent of generated Aludel template definitions.
 
 `npm test` runs the graph mapper and the actual Worker, D1, and SQLite Durable
 Objects in Miniflare against a local fake Breakfast server. It covers auth,

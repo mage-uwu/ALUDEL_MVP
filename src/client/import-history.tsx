@@ -1,8 +1,16 @@
 import { sourceCsvRows, type ImportHistory } from "../shared/import-history";
+import { PdfViewer } from "./pdf-viewer";
 
 /** React renders source data as text. Embedded HTML, scripts and links never run. */
 export function ImportedHistory({ history, download }: { history: ImportHistory; download?: string }) {
   const source = history.sourceDocument;
+  if(source?.mediaType === "application/pdf")return <section className="card glass-frosted history-record" aria-label="Imported historical content">
+    <div className="history-heading"><h2>Original PDF</h2>{download && <a href={download} download>Download source</a>}</div>
+    <p className="template-meta">{source.pdf?.fileName} · {source.pdf?.pages || "Unknown"} pages</p>
+    {source.pdf?.reviewReason && <p className="history-notice">Text extraction needs review: {source.pdf.reviewReason}</p>}
+    {download && <><a href={`${download}?inline=1`} target="_blank" rel="noopener noreferrer">Open PDF</a>
+      <PdfViewer url={download} /></>}
+  </section>;
   const rows = source && ["text/csv", "text/tab-separated-values"].includes(source.mediaType)
     ? sourceCsvRows(source.content, source.delimiter ?? (source.mediaType === "text/csv" ? "," : "\t")) : null;
   return <section className="card glass-frosted history-record" aria-label="Imported historical content">

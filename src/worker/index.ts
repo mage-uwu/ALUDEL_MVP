@@ -15,7 +15,7 @@ import { applyPlan, configured, optimize, readInput } from "./optimize";
 import { breakfastKey } from "./breakfast-api";
 import { ask, CHAT, storeFor, type ChatStore } from "./chat";
 export { ChatStore } from "./chat";
-import { vaultFor, type Vault, type Report } from "./vault";
+import { vaultFor, type Vault } from "./vault";
 export { Vault } from "./vault";
 import {
   currentUser,
@@ -171,6 +171,8 @@ async function teamRoutes(
     }
     return error(405, "Method not allowed");
   }
+  const pendingSource=rest.match(new RegExp(`^/breakfast/jobs/(${UUID})/pending/(\\d+)/source$`));
+  if(pendingSource && req.method === "GET")return vaultFor(env,teamId).originalResponse(pendingSource[2]!,req.headers.get("range"),new URL(req.url).searchParams.get("inline")==="1",pendingSource[1]!);
   const pendingImport = rest.match(new RegExp(`^/breakfast/jobs/(${UUID})/pending(?:/(\\d+))?$`));
   if (pendingImport) {
     const vault=vaultFor(env,teamId), id=pendingImport[1]!, seq=pendingImport[2] === undefined ? null : Number(pendingImport[2]);
@@ -736,16 +738,7 @@ async function teamRoutes(
   }
   const sourceRecord = rest.match(new RegExp(`^/reports/(${UUID})/source$`));
   if (sourceRecord && req.method === "GET") {
-    const saved = await vaultFor(env, teamId).reportJson(sourceRecord[1]!);
-    const found: Report | null = saved ? JSON.parse(saved) : null;
-    const source = found?.history?.sourceDocument;
-    if (!source) return error(404, "Original source record is not available");
-    const ext = ({ "text/csv": "csv", "text/tab-separated-values": "tsv", "application/json": "json", "text/plain": "txt", "text/markdown": "md" })[source.mediaType];
-    return new Response(source.content, { headers: {
-      "content-type": `${source.mediaType}; charset=utf-8`, "cache-control": "no-store",
-      "content-disposition": `attachment; filename="source-${found!.id}.${ext}"`,
-      "x-content-type-options": "nosniff",
-    } });
+    return vaultFor(env,teamId).originalResponse(sourceRecord[1]!,req.headers.get("range"),new URL(req.url).searchParams.get("inline")==="1");
   }
   if (rest === "/vault/query" && req.method === "POST") {
     const q = normalizeQuery(await readBody(req));

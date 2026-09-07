@@ -6,6 +6,8 @@ import { readTransferPage, planTransferPage, type TransferRow } from "./import-t
 import { fileImportRecords, type ImportVault } from "./import-records";
 import { mapRecord, type TemplateMapping } from "./import-plan";
 import { readBreakfastSemantics } from "../shared/breakfast";
+import { readSourceChunk } from "../shared/import-history";
+import { PdfStore } from "./pdf-store";
 import { importReconciler, withSiteProfiles } from "./import-context";
 import type { Env } from "./index";
 
@@ -23,8 +25,10 @@ const ACTIVE = "'uploading','processing','importing'";
 /** One durable queue inside the team's existing Vault. Alarms survive closed tabs. */
 export class BreakfastImports {
   private sql: SqlStorage;
+  private pdfs: PdfStore;
   constructor(private ctx: DurableObjectState, private env: Env, private vault: ImportVault) {
     this.sql = ctx.storage.sql;
+    this.pdfs = new PdfStore(this.sql);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS breakfast_jobs (
       id TEXT PRIMARY KEY, team_id TEXT NOT NULL, user_id TEXT NOT NULL, user_name TEXT NOT NULL,
       name TEXT NOT NULL, timezone TEXT NOT NULL, upstream_id TEXT, state TEXT NOT NULL,
@@ -231,13 +235,15 @@ export class BreakfastImports {
         return item ? JSON.parse(item.mapping) : undefined;
       }, importReconciler(this.env,row.team_id));
     } catch (e) { throw new BreakfastError(e instanceof Error ? e.message : "Invalid import page", 422); }
+    const chunks = await Promise.all(plan.items.filter(item=>item.kind==="source_chunk").map(item=>readSourceChunk(item.payload)));
     this.ctx.storage.transactionSync(() => {
       const current = this.transfer(row.id);
       if ((current?.next_seq ?? 0) !== page.start || current?.snapshot !== previous?.snapshot) return;
+      for(const {chunk,bytes} of chunks)this.pdfs.stage(chunk,bytes);
       for (const item of plan.catalog) this.sql.exec("INSERT INTO breakfast_catalog (job_id,kind,source_id,mapping) VALUES (?,?,?,?) ON CONFLICT(job_id,kind,source_id) DO UPDATE SET mapping=excluded.mapping",
         row.id, item.kind, item.source, JSON.stringify(item.mapping));
       for (const [offset, item] of plan.items.entries()) this.sql.exec("INSERT OR IGNORE INTO breakfast_items (job_id,seq,kind,payload,outcome,error) VALUES (?,?,?,?,?,?)",
-        row.id, page.start + offset, item.kind, JSON.stringify(item.payload), item.kind === "pending" ? "pending" : item.kind === "rejected" ? "rejected" : null, ["pending","rejected"].includes(item.kind) ? String(item.payload.error) : null);
+        row.id, page.start + offset, item.kind, JSON.stringify(item.kind === "source_chunk" ? {...item.payload,data:undefined} : item.payload), item.kind === "source_chunk" ? "created" : item.kind === "pending" ? "pending" : item.kind === "rejected" ? "rejected" : null, ["pending","rejected"].includes(item.kind) ? String(item.payload.error) : null);
       const end = page.start + page.items.length, done = page.nextCursor === null;
       if (done) {
         const staged = this.sql.exec<{ total: number; records: number }>("SELECT COUNT(*) AS total, COALESCE(SUM(kind IN ('record','rejected','pending')),0) AS records FROM breakfast_items WHERE job_id = ?", row.id).toArray()[0]!;
