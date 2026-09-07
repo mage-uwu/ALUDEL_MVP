@@ -11,6 +11,10 @@ export type Role = "owner" | "admin" | "member";
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export interface Block {
+  /** Stable imported field identity and reviewed role; independent of UI wording. */
+  fieldIdentity?: string;
+  semanticRole?: string;
+  semanticConfidence?: number;
   id: string;
   kind: BlockKind;
   label: string;
@@ -99,6 +103,9 @@ function normalizeTask(input: unknown): Task {
       label: str(b.label, LIMITS.label, DEFAULT_LABEL[kind]),
       unit: kind === "number" ? str(b.unit, LIMITS.unit, "").trim() : "",
       options: kind === "buttons" ? optionsOf(b.options) : [],
+      ...(typeof b.fieldIdentity === "string" && b.fieldIdentity.length <= 256 ? { fieldIdentity: b.fieldIdentity } : {}),
+      ...(typeof b.semanticConfidence === "number" && b.semanticConfidence >= 0 && b.semanticConfidence <= 1 ? {semanticConfidence:b.semanticConfidence} : {}),
+      ...(typeof b.semanticRole === "string" && /^[a-z_]{1,64}$/.test(b.semanticRole) ? { semanticRole: b.semanticRole } : {}),
     });
   }
   folding = null;

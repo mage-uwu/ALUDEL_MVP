@@ -134,7 +134,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
       assert.equal(url.searchParams.get("transmute"), "false");
       res.writeHead(202); res.end(JSON.stringify({ jobId: `job-test-${uploads}`, reviewSessionToken: "must-not-reach-client" }));
     } else if (url.pathname.endsWith("/graph")) { assert.fail("The import queue must not download the full graph"); }
-    else if (url.pathname.endsWith("/import")) {
+    else if ((url.pathname.endsWith("/import") || url.pathname.endsWith("/database"))) {
       const cursor=url.searchParams.get("cursor"),start=Number(cursor?.split(":")[1] ?? 0),jobId=url.pathname.split("/").at(-2);
       pageCalls.push({jobId,cursor,start});
       if(start && mode==="page-fail") {res.writeHead(422);res.end('{}');return;}
@@ -159,7 +159,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
   await mf.ready;
   // A harmless request initializes the exact application schema.
   await mf.dispatchFetch("http://localhost/api/me");
-  const db = await mf.getD1Database("DB");
+  let db = await mf.getD1Database("DB");
   const tokenA = "a".repeat(43), tokenB = "b".repeat(43);
   for (const [team, token] of [[teamA, tokenA], [teamB, tokenB]]) {
     await db.prepare("INSERT INTO teams (id,name,created_at) VALUES (?,?,?)").bind(team, team, new Date().toISOString()).run();
@@ -234,6 +234,9 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     graph=fixture();
   });
   await t.test("explicit busy rejection and uncertain uploads are never automatically resubmitted", async () => {
+    const before = uploads;
+    const invalid = await call(teamA, "?timezone=America%2FNew_York", {method:"POST",headers:{"content-type":`multipart/form-data; boundary=${"b".repeat(201)}`,"x-import-id":randomUUID()},body:"invalid multipart"});
+    assert.equal(invalid.status,500);assert.equal((await invalid.json()).job.state,"failed");assert.equal(uploads,before);
     mode = "busy";
     const busy = await send(); assert.equal(busy.status, 429); assert.equal(busy.headers.get("retry-after"), "5");
     mode = "disconnect";
@@ -254,7 +257,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     await mf.dispose();
     mode="ok";
     mf = new Miniflare(runtimeOptions);
-    await mf.ready;
+    await mf.ready; db = await mf.getD1Database("DB");
     const response = await call(teamA, `/${imported.id}`); const job = await response.json();
     assert.equal(response.status, 200, JSON.stringify(job));
     assert.equal(job.state, "complete", JSON.stringify(job)); assert.equal(job.filed, 2);
@@ -275,6 +278,70 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     assert.ok(pageCalls.filter(c=>c.jobId===upstreamId).length>16);
     largeItems=null;pageSize=2;
   });
+  await t.test("native database: 60 repairs create one template and four stacks; retries preserve customized objects",async()=>{
+    const person={name:null,firstName:null,lastName:null,emails:[],phones:[]};
+    const sourceTemplate={kind:"template",payload:{id:"format-1",name:"Native repair report",sortStatus:"learned",blocks:[
+      {id:"notes",identity:"repair_notes",label:"Repair notes",valueKind:"text",options:[],unit:""},
+      {id:"pressure",identity:"pressure",label:"Pressure",valueKind:"number",options:[],unit:"psi"},
+      {id:"outcome",identity:"outcome",label:"Outcome",valueKind:"choice",options:["PASS","FAIL"],unit:""}
+    ]}};
+    const sourceSites=Array.from({length:4},(_,i)=>({kind:"site",payload:{id:`native-site-${i}`,sourceAddress:`${5100+i} Native Lane`,address:`${5100+i} Native Lane`,clientName:`Native Client ${i}`,place:null}}));
+    const record=(i,siteId=sourceSites[i%4].payload.id)=>({kind:"record",payload:{id:`record:native-${i}`,templateId:"format-1",siteId,
+      values:{notes:`Repaired valve ${i}`,pressure:42+i,outcome:"PASS"},
+      semantics:{schemaVersion:1,client:{...person,name:`Native Client ${i%4}`,emails:[`client${i%4}@example.com`]},employee:{...person,name:"Repair Worker"},user:person,date:{value:"2026-01-01",precision:"date"},serviceAddresses:[`${5100+i%4} Native Lane`]},
+      origin:{file:"repairs.csv",externalId:`native-${i}`},siteBinding:{status:siteId?"bound":"manual_sort",reason:siteId?"corroborated_identity":"insufficient_corroboration"},sortDecision:{status:"learned"}
+    }});
+    largeItems=[sourceTemplate,...sourceSites,...Array.from({length:60},(_,i)=>record(i))];pageSize=32;
+    const first=await (await send()).json(),completed=await waitFor(first.id);
+    assert.equal(completed.filed,60);assert.equal(completed.pending,0);
+    const templates=(await db.prepare("SELECT * FROM templates WHERE team_id=? AND name=?").bind(teamA,"Native repair report").all()).results;
+    assert.equal(templates.length,1);const template=templates[0],doc=JSON.parse(template.doc);
+    const sites=(await db.prepare("SELECT * FROM sites WHERE team_id=? AND client_name LIKE 'Native Client %' ORDER BY client_name").bind(teamA).all()).results;
+    assert.equal(sites.length,4);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM dispatches WHERE template_id=?").bind(template.id).first()).n,4);
+    for(const site of sites) assert.equal((await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports?site=${site.id}&template=${template.id}&limit=100`,{headers:{authorization:`Bearer aludel_${tokenA}`}}).then(r=>r.json())).length,15);
+    const custom={tasks:[{...doc.tasks[0],name:"Our repair checklist",blocks:doc.tasks[0].blocks.map(b=>b.kind==="buttons"?{...b,options:[...b.options,"RECHECK"]}:b)}]};
+    await db.prepare("UPDATE templates SET name=?,doc=?,version=2 WHERE id=?").bind("Our customized repair report",JSON.stringify(custom),template.id).run();
+    await db.prepare("UPDATE sites SET client_name=?,emails=?,position=9 WHERE id=?").bind("Our existing client",'["verified@example.com"]',sites[0].id).run();
+    // Batch-local format/field IDs and LLM display wording may change. Stable
+    // field identities still reuse the existing template and its custom tasks.
+    largeItems=structuredClone(largeItems);largeItems[0].payload.id="format-9";
+    largeItems[0].payload.name="Different LLM wording";
+    largeItems[0].payload.blocks.forEach(b=>{b.label=`Renamed ${b.label}`;});
+    for(let i=0;i<4;i++)largeItems[i+1].payload.id=sites[i].id;
+    largeItems.filter(i=>i.kind==="record").forEach((r,i)=>{r.payload.templateId="format-9";r.payload.siteId=sites[i%4].id;});
+    const repeated=await waitFor((await (await send()).json()).id);assert.equal(repeated.duplicates,60);assert.equal(repeated.filed,0);
+    assert.deepEqual(JSON.parse((await db.prepare("SELECT doc FROM templates WHERE id=?").bind(template.id).first()).doc),custom);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM dispatches WHERE template_id=?").bind(template.id).first()).n,4);
+    assert.equal((await db.prepare("SELECT client_name FROM sites WHERE id=?").bind(sites[0].id).first()).client_name,"Our existing client");
+    assert.equal((await db.prepare("SELECT emails FROM sites WHERE id=?").bind(sites[0].id).first()).emails,'["verified@example.com"]');
+    // An unresolved record survives independently of Breakfast, with a true
+    // unknown date, and can later be filed into an existing site/template.
+    const manual=record(100,null);manual.payload.semantics.date=null;
+    largeItems=[sourceTemplate,manual];
+    const pending=await waitFor((await (await send()).json()).id);assert.equal(pending.pending,1);assert.equal(pending.rejected,0);
+    const list=await call(teamA,`/${pending.id}/pending`).then(r=>r.json());assert.equal(list.length,1);
+    let detail=await call(teamA,`/${pending.id}/pending/${list[0].seq}`).then(r=>r.json());
+    assert.equal(detail.source.values.notes,"Repaired valve 100");assert.equal(detail.semantics.date,null);
+    await mf.dispose();mf=new Miniflare(runtimeOptions);await mf.ready;db=await mf.getD1Database("DB");
+    detail=await call(teamA,`/${pending.id}/pending/${list[0].seq}`).then(r=>r.json());assert.equal(detail.source.values.notes,"Repaired valve 100");
+    assert.equal((await call(teamB,`/${pending.id}/pending/${list[0].seq}`,{},tokenB)).status,404);
+    const filed=await call(teamA,`/${pending.id}/pending/${list[0].seq}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({siteId:sites[0].id,date:"2026-01-02"})});
+    assert.equal(filed.status,200,await filed.clone().text());const result=await filed.json();
+    const report=await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports/${result.id}`,{headers:{authorization:`Bearer aludel_${tokenA}`}}).then(r=>r.json());
+    assert.equal(report.semantics.client.emails[0],"client0@example.com");assert.equal(report.semantics.date.value,"2026-01-02");
+    assert.equal(report.templateId,template.id);assert.equal(report.siteId,sites[0].id);
+    const invoiceTemplate={kind:"template",payload:{id:"invoice-format",formatIdentity:["record_type:invoice"],name:"Native service invoice",sortStatus:"learned",blocks:[{id:"amount",identity:"amount",label:"Total",valueKind:"number",options:[],unit:""}]}};
+    largeItems=[invoiceTemplate,...sourceSites.map((s,i)=>({kind:"site",payload:{...s.payload,id:sites[i].id}})),...sites.map((s,i)=>{
+      const invoice=record(200+i,s.id);invoice.payload.templateId="invoice-format";invoice.payload.values={amount:"$1,234.50"};return invoice;
+    })];
+    const invoices=await waitFor((await (await send()).json()).id);assert.equal(invoices.filed,4);assert.equal(invoices.pending,0);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM dispatches WHERE team_id=? AND site_id IN (?,?,?,?)").bind(teamA,...sites.map(s=>s.id)).first()).n,8);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM sites WHERE id IN (?,?,?,?)").bind(...sites.map(s=>s.id)).first()).n,4);
+
+    largeItems=null;pageSize=2;
+  });
+
 });
 
 test("Breakfast runtime key names authenticate consistently and missing keys make no upstream request", async t => {

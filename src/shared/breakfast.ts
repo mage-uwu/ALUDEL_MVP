@@ -11,6 +11,7 @@ export interface ImportJob {
   filed: number;
   duplicates: number;
   rejected: number;
+  pending?: number;
   total: number;
   processed: number;
   resumable: boolean;

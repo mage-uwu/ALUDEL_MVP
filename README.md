@@ -90,7 +90,7 @@ Choose ZIP, CSV/TSV, JSON/JSONL, text or Markdown files (64 MiB including multip
 framing) and the timezone used on the paperwork. PDFs, DOCX and scanned images
 need text extraction/OCR before upload. Processing and filing continue in the
 team's existing Vault Durable Object after the page closes. Recent imports show
-progress, filed/duplicate/rejected counts and the first 50 rejected records.
+progress, filed/duplicate/pending/rejected counts and documents awaiting review.
 
 Configure the ALUDEL Worker's `BREAKFAST_KEY` runtime secret with **the same
 secret value** as Breakfast's `BFAST_API_KEY`:
@@ -109,10 +109,11 @@ for this built-in flow. No new Cloudflare binding or migration is required.
 Until the secret exists, Imports explains that the connection is not configured.
 
 The app submits once, polls Breakfast with durable alarms, and downloads the
-completed `/v1/pipeline/jobs/:jobId/import` projection one page at a time. Each
+completed `/v1/pipeline/jobs/:jobId/database` export one page at a time (`/import`
+is a compatibility fallback for older Breakfast deployments). Each
 page, catalog mapping, snapshot and next cursor is committed together in the
 team's Vault SQLite storage. No records file until the complete manifest is
-staged and its counts match. Filing then processes ten items at a time through
+staged and its counts match. Filing then processes fifty items at a time through
 the same validation gate as `/import`.
 Each upload gets a local UUID (`X-Import-Id`); repeating that UUID returns the
 existing job without resending its files. A lost upload confirmation is shown as
@@ -122,23 +123,25 @@ interruptions or repeated errors. A changed Breakfast snapshot restarts staging
 before filing, so two versions cannot be mixed. Requests are authorized before
 accessing the team's queue.
 
-Template IDs include the exported schema so unrelated `template_01` buckets
-cannot overwrite one another. Sites reuse their normalized address or an existing
-normalized place, and records use the source `externalId` for deduplication.
+Template IDs use stable field identities, types and explicit format discriminators;
+compatible existing templates retain their tasks, units, options and versions.
+Aludel sends existing site profiles to Breakfast's binder so resolved records reuse
+the team's worksite IDs. Records use the source `externalId` for deduplication.
 Existing templates/sites are never overwritten. Address-only sites retain their
-address as a note for the place picker. Identifier fields stay text, choices keep
-their keys, dates are interpreted in the chosen timezone, and records without a
-valid date are reported as rejected. Constants and photo values follow the current
-graph importer's behavior (constants omitted; photos not filed).
+source address for the place picker. Identifier fields and constants stay text,
+choices keep their keys, and dates retain their resolved precision. Native records
+without a site or valid date, or with unsupported field values, remain complete
+in the team's manual review queue. Photo fields require further review before filing.
 
 Each transfer response is bounded to 1 MiB and 256 items; total result size is
 not subject to the former 16 MiB graph cap. The queue holds only the current
 page and its referenced catalog mappings in Worker memory. Learned field IDs,
 types, choice options, client/site identities, resolved dates and source origins
-use the same mapping contract as graph imports. Individual staged records and
-templates retain their 120 KiB limit; oversized records are reported as rejected.
-Raw documents remain in Breakfast; ALUDEL retains job checkpoints, normalized
-import items and filed reports. TRANSMUTE is disabled for these imports.
+use the shared resolved contract. Individual staged records and templates retain
+their 120 KiB limit; an oversized native source row pauses transfer explicitly.
+ALUDEL retains job checkpoints, imported field payloads, unresolved documents and
+filed reports; original upload files remain in Breakfast. TRANSMUTE is disabled
+for these imports, and normal jobs bypass GraphTM training and graph expansion.
 
 Deploy Breakfast's paginated import endpoint before this ALUDEL update. Existing
 jobs that failed with "The processed result is too large" gain a **Resume import**
@@ -349,3 +352,31 @@ completed jobs must be re-imported to populate resolved semantics. Changing the
 schema identity calculation can create new templates when re-importing records
 previously imported with the display-dependent calculation; existing templates
 are not migrated or deleted.
+
+
+### Native Breakfast database imports
+
+Breakfast's normal path retains Tsetlin format sorting and label minting, then
+resolves semantics and binds sites without GraphTM training or graph expansion.
+Aludel consumes `/database` in bounded, resumable pages (with a legacy `/import`
+fallback). Templates and sites precede records, which are ordered by site and format.
+
+The importer reuses compatible templates by stable field identity and existing
+site IDs. Batch-local format numbers and renamed display labels do not create new
+objects. Existing template tasks, options, units, versions and site settings remain
+authoritative. The team's existing site directory is supplied as a streamed binding
+profile part; contacts belonging to employees/users remain separate from clients.
+Each site/template pair has one dispatch: 60 reports of one format at four sites
+create one template and four stacks. Replayed documents use the existing origin
+idempotency key. Filing batches reuse site, template and dispatch lookups.
+
+Unresolved documents are saved in the team's SQLite Vault, including original
+values, provenance, binding evidence and unknown dates. **Review documents** on an
+import opens these saved documents; choose a site and supply a date when missing.
+Manual filing does not require Breakfast or another upload. Records whose fields
+cannot fit a native form remain pending instead of silently losing those fields.
+Final reports retain the resolved client/employee/user/date contract. Imported
+field identities and semantic roles are stored with template definitions.
+
+Database export is a versioned relational JSON contract, not LLM-generated SQL.
+Aludel's existing D1 objects and SQLite Vault remain the storage model.

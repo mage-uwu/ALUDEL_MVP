@@ -6,7 +6,7 @@ import { mapTemplate, mapSite, mapRecord, type TemplateMapping } from "./import-
 type Props = Record<string, unknown>;
 interface Node { id: string; kind: string; properties?: Props }
 interface Edge { source: string; target: string; kind: string }
-export interface ImportItem { kind: "template" | "site" | "record" | "rejected"; payload: Props }
+export interface ImportItem { kind: "template" | "site" | "record" | "rejected" | "pending"; payload: Props }
 const props = (n?: Node): Props => n?.properties ?? {};
 const text = (v: unknown) => typeof v === "string" ? v.trim() : "";
 const clean = (v: unknown) => typeof v === "string" ? v.replace(/^[•\s]+/, "").trim() : v;

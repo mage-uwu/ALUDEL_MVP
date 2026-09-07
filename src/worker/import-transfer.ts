@@ -6,7 +6,7 @@ export type TransferRow = {
   total_items: number; total_records: number; complete: number;
 }
 export interface TransferPage {
-  schemaVersion: 1; jobId: string; snapshot: string; start: number;
+  schemaVersion: 1; format?: string; jobId: string; snapshot: string; start: number;
   nextCursor: string | null; totalItems: number; totalRecords: number;
   items: Array<{ kind: string; payload: Record<string, unknown> }>;
 }
@@ -33,6 +33,11 @@ export function readTransferPage(raw: unknown, jobId: string, previous?: Transfe
     if (item.kind === "template" && (typeof p.name !== "string" || !Array.isArray(p.blocks) || p.blocks.length > 10_000
       || !p.blocks.every(b => object(b) && id(b.id) && typeof b.label === "string" && typeof b.valueKind === "string" && Array.isArray(b.options))
       || new Set(p.blocks.map(b => (b as Record<string, unknown>).id)).size !== p.blocks.length)) throw new Error("Invalid import template");
+    if (item.kind === "template" && page.format === "breakfast-database") {
+      const fields=p.blocks as Record<string,unknown>[];
+      if (!fields.every(b=>id(b.identity)) || new Set(fields.map(b=>b.identity)).size !== fields.length
+        || (p.formatIdentity !== undefined && (!Array.isArray(p.formatIdentity) || !p.formatIdentity.every(v=>typeof v === "string")))) throw new Error("Invalid database field identities");
+    }
     if (item.kind === "record" && (!object(p.origin) || !object(p.values) || (p.templateId !== null && !id(p.templateId)) || (p.siteId !== null && !id(p.siteId)))) throw new Error("Invalid import record");
   }
   return page;
@@ -40,7 +45,8 @@ export function readTransferPage(raw: unknown, jobId: string, previous?: Transfe
 
 /** Only one page and its referenced catalog entries are held in Worker memory. */
 export async function planTransferPage(page: TransferPage, teamId: string, jobId: string, timezone: string,
-  load: (kind: string, source: string) => TemplateMapping | { id: string } | undefined) {
+  load: (kind: string, source: string) => TemplateMapping | { id: string } | undefined,
+  reconcile?: { template: (source: SourceTemplate, proposed: Awaited<ReturnType<typeof mapTemplate>>) => Promise<Awaited<ReturnType<typeof mapTemplate>>>; site: (source: SourceSite, proposed: Awaited<ReturnType<typeof mapSite>>) => Promise<Awaited<ReturnType<typeof mapSite>>> }) {
   const catalog: CatalogItem[] = [], items: ImportItem[] = [];
   const cache = new Map<string, TemplateMapping | { id: string } | undefined>();
   const get = (kind: string, source: unknown) => {
@@ -52,11 +58,13 @@ export async function planTransferPage(page: TransferPage, teamId: string, jobId
   for (const item of page.items) {
     const p = item.payload;
     if (item.kind === "template") {
-      const mapped = await mapTemplate(p as unknown as SourceTemplate, teamId);
+      let mapped = await mapTemplate(p as unknown as SourceTemplate, teamId, jobId);
+      if (reconcile) mapped = await reconcile.template(p as unknown as SourceTemplate,mapped);
       catalog.push({ kind: "template", source: p.id as string, mapping: mapped.mapping });
       cache.set(JSON.stringify(["template", p.id]), mapped.mapping); items.push(mapped.item);
     } else if (item.kind === "site") {
-      const mapped = await mapSite(p as unknown as SourceSite, teamId, jobId);
+      let mapped = await mapSite(p as unknown as SourceSite, teamId, jobId);
+      if (reconcile) mapped = await reconcile.site(p as unknown as SourceSite,mapped);
       catalog.push({ kind: "site", source: p.id as string, mapping: { id: mapped.id } });
       cache.set(JSON.stringify(["site", p.id]), { id: mapped.id }); items.push(mapped.item);
     } else if (item.kind === "record") {

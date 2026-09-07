@@ -4,6 +4,9 @@ import { breakfast, breakfastKey, BreakfastError, limitStream, uploadHeaders } f
 import { type ImportItem } from "./graph-import";
 import { readTransferPage, planTransferPage, type TransferRow } from "./import-transfer";
 import { fileImportRecords, type ImportVault } from "./import-records";
+import { mapRecord, type TemplateMapping } from "./import-plan";
+import { readBreakfastSemantics } from "../shared/breakfast";
+import { importReconciler, withSiteProfiles } from "./import-context";
 import type { Env } from "./index";
 
 type JobRow = {
@@ -46,10 +49,10 @@ export class BreakfastImports {
     return row.phase === "transfer" || row.message === "The processed result is too large. Split the source into smaller uploads.";
   }
   private view(row: JobRow): ImportJob {
-    const c = this.sql.exec<{ total: number; filed: number; duplicates: number; rejected: number; processed: number }>(`SELECT
+    const c = this.sql.exec<{ total: number; filed: number; duplicates: number; rejected: number; pending: number; processed: number }>(`SELECT
       COUNT(*) AS total, COALESCE(SUM(outcome = 'filed'),0) AS filed, COALESCE(SUM(outcome = 'duplicate'),0) AS duplicates,
-      COALESCE(SUM(outcome = 'rejected'),0) AS rejected, COUNT(outcome) AS processed
-      FROM breakfast_items WHERE job_id = ? AND kind IN ('record','rejected')`, row.id).toArray()[0]!;
+      COALESCE(SUM(outcome = 'rejected'),0) AS rejected, COALESCE(SUM(outcome = 'pending'),0) AS pending, COUNT(outcome) AS processed
+      FROM breakfast_items WHERE job_id = ? AND kind IN ('record','rejected','pending')`, row.id).toArray()[0]!;
     return {
       id: row.id, name: row.name, state: row.state, phase: row.phase, percent: row.percent, message: row.message,
       createdAt: row.created_at, updatedAt: row.updated_at, ...c, total: this.transfer(row.id)?.total_records ?? c.total,
@@ -64,6 +67,42 @@ export class BreakfastImports {
       COALESCE(json_extract(payload, '$.record'), json_extract(payload, '$.origin.externalId'), 'Record') AS record, error
       FROM breakfast_items WHERE job_id = ? AND error IS NOT NULL ORDER BY seq LIMIT 50`, id).toArray()
     };
+  }
+  pending(id: string, after = -1) {
+    if (!this.row(id)) return null;
+    return this.sql.exec<{ seq:number; record:string; reason:string }>(`SELECT seq,
+      COALESCE(json_extract(payload,'$.origin.externalId'),json_extract(payload,'$.record'),'Document') AS record,
+      error AS reason FROM breakfast_items WHERE job_id=? AND outcome='pending' AND seq>? ORDER BY seq LIMIT 50`,id,after).toArray();
+  }
+  pendingDocument(id: string, seq: number) {
+    const row = this.sql.exec<{payload:string;error:string}>("SELECT payload,error FROM breakfast_items WHERE job_id=? AND seq=? AND outcome='pending'",id,seq).toArray()[0];
+    return row ? {...JSON.parse(row.payload),reason:row.error} : null;
+  }
+  async resolvePending(id: string, seq: number, siteId: string, date?: string) {
+    const job = this.row(id), saved = this.pendingDocument(id,seq);
+    if (!job || job.state !== "complete" || !saved) throw new Error("This document is not ready for manual filing");
+    let payload = saved;
+    if (saved.source) {
+      const source = structuredClone(saved.source);
+      if (date) source.semantics.date = {value:date,precision:date.length === 10 ? "date" : "timestamp"};
+      readBreakfastSemantics(source.semantics);
+      const catalog = this.sql.exec<{mapping:string}>("SELECT mapping FROM breakfast_catalog WHERE job_id=? AND kind='template' AND source_id=?",id,source.templateId).toArray()[0];
+      const mapped = mapRecord(source,catalog ? JSON.parse(catalog.mapping) as TemplateMapping : undefined,siteId,job.timezone);
+      if (mapped.kind !== "record") throw new Error(String(mapped.payload.error ?? "Document requires further review"));
+      payload = mapped.payload;
+    } else {
+      payload = {...saved,siteId};
+      if (date) {
+        if (payload.semantics) payload.semantics = {...payload.semantics,date:{value:date,precision:date.length === 10 ? "date" : "timestamp"}};
+        else payload.performedAt=date;
+      }
+    }
+    const result = (await fileImportRecords(this.env,job.team_id,{id:job.user_id,name:job.user_name},[payload],this.vault)).results[0]!;
+    if (result.error) throw new Error(result.error);
+    this.sql.exec("UPDATE breakfast_items SET outcome=?,error=NULL WHERE job_id=? AND seq=? AND outcome='pending'",result.duplicate ? "duplicate" : "filed",id,seq);
+    const progress=this.get(id)!;
+    this.update(id,"complete",`${progress.filed} filed, ${progress.duplicates} already present, ${progress.pending ?? 0} awaiting review, ${progress.rejected} rejected`,"filing",100);
+    return result;
   }
   private update(id: string, state: ImportJob["state"], message: string, phase: string = state, percent?: number, delay = 2000) {
     this.sql.exec("UPDATE breakfast_jobs SET state = ?, phase = ?, message = ?, updated_at = ?, next_poll = ?, percent = COALESCE(?, percent) WHERE id = ?",
@@ -91,14 +130,21 @@ export class BreakfastImports {
       this.sql.exec(`INSERT INTO breakfast_jobs (id,team_id,user_id,user_name,name,timezone,state,phase,message,created_at,updated_at,next_poll)
         VALUES (?,?,?,?,?,?,'uploading','uploading','Sending documents',?,?,?)`, id, team, user, userName, name, timezone, now(), now(), Date.now() + 180_000);
       await this.schedule(); // recovery alarm exists before any network side effect
+      let submitted = false;
       try {
         const query = new URLSearchParams({ timezone, geocode: "true", semanticReview: "true", transmute: "false" });
-        const accepted = await breakfast(this.env, `/v1/pipeline/jobs?${query}`, { method: "POST", headers, body: limitStream(req.body!, IMPORT_MAX_BYTES) }, 120_000);
+        const body = await withSiteProfiles(this.env, team, headers, limitStream(req.body!, IMPORT_MAX_BYTES));
+        submitted = true;
+        const accepted = await breakfast(this.env, `/v1/pipeline/jobs?${query}`, { method: "POST", headers, body }, 120_000);
         if (typeof accepted.jobId !== "string" || !/^job-[A-Za-z0-9_-]+$/.test(accepted.jobId)) throw new Error("Missing upstream job ID");
         this.sql.exec("UPDATE breakfast_jobs SET upstream_id = ? WHERE id = ?", accepted.jobId, id);
         this.update(id, "processing", "Documents accepted", "queued", 0);
       } catch (e) {
         console.error("breakfast_upload_failed", { jobId: id, detail: (e instanceof Error ? e.message : "Unknown upload error").replaceAll(key, "[REDACTED]").slice(0, 300) });
+        if (!submitted) {
+          this.update(id, "failed", "Could not prepare existing sites for import. No documents were sent.");
+          return json({ error: "Could not prepare existing sites for import", job: this.get(id) }, 500);
+        }
         // A received 4xx is a rejected request. A timeout/5xx may have accepted it.
         const rejected = e instanceof BreakfastError && e.status >= 400 && e.status < 500;
         this.update(id, rejected ? "failed" : "uncertain", rejected ? e.message : "Upload confirmation was lost. This upload will not be automatically submitted again.");
@@ -156,9 +202,13 @@ export class BreakfastImports {
   }
   private async receivePage(row: JobRow) {
     const previous = this.transfer(row.id);
-    const path = `/v1/pipeline/jobs/${encodeURIComponent(row.upstream_id!)}/import`;
+    const path = `/v1/pipeline/jobs/${encodeURIComponent(row.upstream_id!)}/database`;
     let raw;
-    try { raw = await breakfast(this.env, path + (previous?.cursor ? `?cursor=${encodeURIComponent(previous.cursor)}` : ""), {}, 60_000); }
+    try {
+      const suffix = previous?.cursor ? `?cursor=${encodeURIComponent(previous.cursor)}` : "";
+      try { raw = await breakfast(this.env,path + suffix,{},60_000); }
+      catch(e) { if (!(e instanceof BreakfastError) || e.status !== 404) throw e; raw = await breakfast(this.env,path.replace(/\/database$/, "/import") + suffix,{},60_000); }
+    }
     catch (e) {
       if (!(e instanceof BreakfastError) || e.status !== 409 || !previous) throw e;
       // Nothing files until every page is staged, so a changed source snapshot
@@ -179,7 +229,7 @@ export class BreakfastImports {
       plan = await planTransferPage(page, row.team_id, row.id, row.timezone, (kind, source) => {
         const item = this.sql.exec<{ mapping: string }>("SELECT mapping FROM breakfast_catalog WHERE job_id = ? AND kind = ? AND source_id = ?", row.id, kind, source).toArray()[0];
         return item ? JSON.parse(item.mapping) : undefined;
-      });
+      }, importReconciler(this.env,row.team_id));
     } catch (e) { throw new BreakfastError(e instanceof Error ? e.message : "Invalid import page", 422); }
     this.ctx.storage.transactionSync(() => {
       const current = this.transfer(row.id);
@@ -187,10 +237,10 @@ export class BreakfastImports {
       for (const item of plan.catalog) this.sql.exec("INSERT INTO breakfast_catalog (job_id,kind,source_id,mapping) VALUES (?,?,?,?) ON CONFLICT(job_id,kind,source_id) DO UPDATE SET mapping=excluded.mapping",
         row.id, item.kind, item.source, JSON.stringify(item.mapping));
       for (const [offset, item] of plan.items.entries()) this.sql.exec("INSERT OR IGNORE INTO breakfast_items (job_id,seq,kind,payload,outcome,error) VALUES (?,?,?,?,?,?)",
-        row.id, page.start + offset, item.kind, JSON.stringify(item.payload), item.kind === "rejected" ? "rejected" : null, item.kind === "rejected" ? String(item.payload.error) : null);
+        row.id, page.start + offset, item.kind, JSON.stringify(item.payload), item.kind === "pending" ? "pending" : item.kind === "rejected" ? "rejected" : null, ["pending","rejected"].includes(item.kind) ? String(item.payload.error) : null);
       const end = page.start + page.items.length, done = page.nextCursor === null;
       if (done) {
-        const staged = this.sql.exec<{ total: number; records: number }>("SELECT COUNT(*) AS total, COALESCE(SUM(kind IN ('record','rejected')),0) AS records FROM breakfast_items WHERE job_id = ?", row.id).toArray()[0]!;
+        const staged = this.sql.exec<{ total: number; records: number }>("SELECT COUNT(*) AS total, COALESCE(SUM(kind IN ('record','rejected','pending')),0) AS records FROM breakfast_items WHERE job_id = ?", row.id).toArray()[0]!;
         if (staged.total !== page.totalItems || staged.records !== page.totalRecords) throw new BreakfastError("Breakfast import record count does not match its manifest", 422);
       }
       this.sql.exec("INSERT INTO breakfast_transfers (job_id,cursor,snapshot,next_seq,total_items,total_records,complete) VALUES (?,?,?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET cursor=excluded.cursor,next_seq=excluded.next_seq,complete=excluded.complete",
@@ -199,7 +249,8 @@ export class BreakfastImports {
     });
   }
   private async fileBatch(row: JobRow) {
-    const items = this.sql.exec<{ seq: number; kind: ImportItem["kind"]; payload: string }>("SELECT seq,kind,payload FROM breakfast_items WHERE job_id = ? AND outcome IS NULL ORDER BY seq LIMIT 10", row.id).toArray();
+    const items = this.sql.exec<{ seq: number; kind: ImportItem["kind"]; payload: string }>("SELECT seq,kind,payload FROM breakfast_items WHERE job_id = ? AND outcome IS NULL ORDER BY seq LIMIT 50", row.id).toArray();
+    const records: Array<{seq:number;payload:Record<string,unknown>}> = [];
     for (const item of items) {
       const p = JSON.parse(item.payload) as Record<string, unknown>;
       let outcome = "created", problem: string | null = null;
@@ -210,15 +261,19 @@ export class BreakfastImports {
       } else if (item.kind === "site") {
         const place = normalizePlace(p.place);
         await this.env.DB.prepare("INSERT INTO sites (id,team_id,client_name,address,place,location_note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING")
-          .bind(p.id, row.team_id, p.clientName, place?.formattedAddress ?? "", place ? JSON.stringify(place) : null, p.locationNote, now(), now()).run();
+          .bind(p.id, row.team_id, p.clientName, place?.formattedAddress ?? p.locationNote, place ? JSON.stringify(place) : null, p.locationNote, now(), now()).run();
       } else {
-        const result = (await fileImportRecords(this.env, row.team_id, { id: row.user_id, name: row.user_name }, [p], this.vault)).results[0]!;
-        outcome = result.error ? "rejected" : result.duplicate ? "duplicate" : "filed"; problem = result.error ?? null;
+        records.push({seq:item.seq,payload:p}); continue;
       }
       this.sql.exec("UPDATE breakfast_items SET outcome = ?, error = ? WHERE job_id = ? AND seq = ?", outcome, problem, row.id, item.seq);
     }
+    if (records.length) {
+      const batch=await fileImportRecords(this.env,row.team_id,{id:row.user_id,name:row.user_name},records.map(r=>r.payload),this.vault);
+      for (const result of batch.results) this.sql.exec("UPDATE breakfast_items SET outcome=?,error=? WHERE job_id=? AND seq=?",
+        result.error ? "pending" : result.duplicate ? "duplicate" : "filed",result.error ?? null,row.id,records[result.index]!.seq);
+    }
     const left = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM breakfast_items WHERE job_id = ? AND outcome IS NULL", row.id).toArray()[0]!.n;
     const progress = this.get(row.id)!;
-    this.update(row.id, left ? "importing" : "complete", left ? "Filing records into your vault" : `${progress.filed} filed, ${progress.duplicates} already present, ${progress.rejected} rejected`, "filing", left ? Math.round(100 * progress.processed / Math.max(1, progress.total)) : 100, 1000);
+    this.update(row.id, left ? "importing" : "complete", left ? "Filing records into your vault" : `${progress.filed} filed, ${progress.duplicates} already present, ${progress.pending ?? 0} awaiting review, ${progress.rejected} rejected`, "filing", left ? Math.round(100 * progress.processed / Math.max(1, progress.total)) : 100, 1000);
   }
 }
