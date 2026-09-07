@@ -8,6 +8,8 @@ import { QUERY_LIMITS, type BlockKind, type Filled, type Origin, type VaultQuery
 import type { Env } from "./index";
 import type { BreakfastSemantics } from "../shared/breakfast";
 import { BreakfastImports } from "./breakfast-imports";
+import type { VaultCatalog, VaultPage } from "../shared/vault";
+import { vaultCursor, vaultWhere, type VaultBrowse } from "./vault-browse";
 
 export type ReportMeta = {
   semantics?: BreakfastSemantics | null;
@@ -139,6 +141,8 @@ export class Vault extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS reports_site ON reports(site_id, performed_at);
       CREATE INDEX IF NOT EXISTS reports_template ON reports(template_id, performed_at);
       CREATE INDEX IF NOT EXISTS reports_when ON reports(performed_at);
+      CREATE INDEX IF NOT EXISTS reports_browse ON reports(performed_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS reports_stack ON reports(site_id, template_id, performed_at DESC, id DESC);
       CREATE TABLE IF NOT EXISTS facts (
         report_id TEXT NOT NULL, seq INTEGER NOT NULL, site_id TEXT NOT NULL, template_id TEXT NOT NULL,
         task_id TEXT NOT NULL, task_name TEXT NOT NULL, block_id TEXT NOT NULL, label TEXT NOT NULL,
@@ -211,6 +215,26 @@ export class Vault extends DurableObject<Env> {
     if (filter.template) q.template = filter.template;
     const { sql, params } = compile(q);
     return this.sql.exec<Row>(sql, ...params).toArray().map(withOrigin);
+  }
+
+  /** Options come from saved submissions, including deleted live objects. */
+  catalog(): VaultCatalog {
+    const options = (column: "template" | "site") => this.sql.exec<{ id: string; name: string; reports: number }>(`
+      SELECT r.${column}_id AS id, COUNT(*) AS reports,
+        (SELECT s.${column}_name FROM reports s WHERE s.${column}_id = r.${column}_id
+         ORDER BY s.submitted_at DESC, s.id DESC LIMIT 1) AS name
+      FROM reports r GROUP BY r.${column}_id ORDER BY name COLLATE NOCASE, id
+    `).toArray();
+    return { templates: options("template"), sites: options("site") };
+  }
+
+  browse(q: VaultBrowse): VaultPage<ReportMeta> {
+    const all = vaultWhere(q), page = vaultWhere(q, true);
+    const total = this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM reports r WHERE ${all.sql}`, ...all.params).toArray()[0]!.n;
+    const rows = this.sql.exec<Row>(`SELECT ${META} FROM reports r WHERE ${page.sql}
+      ORDER BY r.performed_at DESC, r.id DESC LIMIT ?`, ...page.params, q.limit + 1).toArray();
+    const reports = rows.slice(0, q.limit).map(withOrigin);
+    return { reports, total, nextCursor: rows.length > q.limit ? vaultCursor(q, reports.at(-1)!) : null };
   }
 
   get(id: string): Report | null {

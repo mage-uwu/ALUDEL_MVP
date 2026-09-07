@@ -17,6 +17,7 @@ import {
   type Template,
 } from "../shared/model";
 import { loadMaps, PLACE_FIELDS, toAludelPlace } from "./maps";
+import type { VaultCatalog, VaultFilters, VaultPage } from "../shared/vault";
 
 interface Account {
   id: string;
@@ -57,12 +58,13 @@ interface Invite {
   expiresAt: string;
 }
 
-type Section = "templates" | "sites" | "map" | "field" | "imports";
+type Section = "templates" | "sites" | "map" | "field" | "vault" | "imports";
 const SECTIONS: { key: Section; title: string }[] = [
   { key: "templates", title: "Templates" },
   { key: "sites", title: "Sites" },
   { key: "map", title: "Map" },
   { key: "field", title: "Field" },
+  { key: "vault", title: "Vault" },
   { key: "imports", title: "Imports" },
 ];
 
@@ -516,7 +518,6 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [openSite, setOpenSite] = useState<string | null>(null);
   const [filling, setFilling] = useState<DispatchRef | null>(null);
-  const [openReport, setOpenReport] = useState<string | null>(null);
   const inviteToken = location.pathname.startsWith("/invite/")
     ? location.pathname.slice("/invite/".length)
     : null;
@@ -557,7 +558,6 @@ export default function App() {
     if (openId) return <Editor teamId={team.id} id={openId} onBack={() => setOpenId(null)} />;
     if (openSite) return <SiteEditor teamId={team.id} id={openSite} maps={me.maps} onBack={() => setOpenSite(null)} />;
     if (filling) return <FillScreen teamId={team.id} dispatch={filling} onBack={() => setFilling(null)} />;
-    if (openReport) return <ReportScreen teamId={team.id} id={openReport} onBack={() => setOpenReport(null)} />;
     const head = (
       <HomeHeader
         team={team}
@@ -572,7 +572,8 @@ export default function App() {
     if (section === "imports") return <Imports key={team.id} teamId={team.id} head={head} />;
     if (section === "sites") return <Sites team={team} head={head} onOpen={setOpenSite} />;
     if (section === "map") return <MapScreen team={team} head={head} me={me} onOpen={setOpenSite} />;
-    if (section === "field") return <FieldScreen team={team} head={head} onFill={setFilling} onReport={setOpenReport} />;
+    if (section === "field") return <FieldScreen key={team.id} team={team} head={head} onFill={setFilling} />;
+    if (section === "vault") return <VaultScreen key={team.id} teamId={team.id} head={head} />;
     return <Home team={team} head={head} onOpen={setOpenId} />;
   };
 
@@ -1370,23 +1371,23 @@ function Members({
   );
 }
 
-/**
- * Field: what a crew can file — every template dispatched to a site — and what
- * has been filed lately. Pick one, fill it, submit; the record goes to the vault.
- */
-function FieldScreen({ team, head, onFill, onReport }: { team: TeamRef; head: React.ReactNode; onFill: (d: DispatchRef) => void; onReport: (id: string) => void }) {
+/** Field: forms available to fill. Completed submissions belong in Vault. */
+function FieldScreen({ team, head, onFill }: { team: TeamRef; head: React.ReactNode; onFill: (d: DispatchRef) => void }) {
   const [dispatches, setDispatches] = useState<DispatchRef[] | null>(null);
-  const [reports, setReports] = useState<ReportMeta[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<DispatchRef[]>(`/teams/${team.id}/dispatches`).then(setDispatches, (e) => setError(e.message));
-    api<ReportMeta[]>(`/teams/${team.id}/reports?limit=20`).then(setReports, () => setReports([]));
+    const controller = new AbortController();
+    api<DispatchRef[]>(`/teams/${team.id}/dispatches`, { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) setDispatches(data); }, e => { if (!controller.signal.aborted) setError(e.message); });
+    return () => controller.abort();
   }, [team.id]);
   const sites = [...new Map((dispatches ?? []).map((d) => [d.siteId, d.siteName])).entries()];
   return (
     <div className="shell">
       {head}
+      <p className="screen-description">Forms ready to fill at your sites.</p>
       {error && <p className="error">{error}</p>}
+      {!dispatches && !error && <p className="empty" role="status">Loading forms…</p>}
       {sites.map(([siteId, siteName]) => (
         <section key={siteId} className="group">
           <div className="group-head"><span className="group-name">{siteName}</span></div>
@@ -1408,22 +1409,122 @@ function FieldScreen({ team, head, onFill, onReport }: { team: TeamRef; head: Re
           <p className="empty-hint">Dispatch a template to a site and it shows up here for the crew.</p>
         </div>
       )}
-      {reports.length > 0 && (
-        <section className="group">
-          <div className="group-head"><span className="group-name muted">Filed lately</span></div>
-          {reports.map((r) => (
-            <button key={r.id} className="card glass-frosted template-card" onClick={() => onReport(r.id)}>
-              <span className="template-text">
-                <span className="template-name">{r.templateName}</span>
-                <span className="template-meta">{r.siteName} · {ago(r.performedAt)} · {r.byName}{r.origin ? " · imported" : ""}</span>
-              </span>
-              <span className="chevron" aria-hidden="true"><ChevronRight /></span>
-            </button>
-          ))}
-        </section>
-      )}
     </div>
   );
+}
+
+/** The full history, separate from forms to fill. Keep filters and pagination
+ * mounted while reading a report so Back returns to the same place. */
+function VaultScreen({ teamId, head }: { teamId: string; head: React.ReactNode }) {
+  const [filters, setFilters] = useState<VaultFilters>(() => ({ template: "", site: "", from: "", to: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" }));
+  const [catalog, setCatalog] = useState<VaultCatalog | null>(null);
+  const [page, setPage] = useState<VaultPage<ReportMeta> | null>(null);
+  const [pages, setPages] = useState<(string | null)[]>([null]);
+  const [revision, setRevision] = useState(0);
+  const [error, setError] = useState("");
+  const [catalogError, setCatalogError] = useState("");
+  const [openReport, setOpenReport] = useState<string | null>(null);
+  const root = useRef<HTMLDivElement>(null), scroll = useRef(0);
+  const base = `/teams/${teamId}/vault`;
+  const invalidRange = Boolean(filters.from && filters.to && filters.from > filters.to);
+  const query = new URLSearchParams({ ...filters, limit: "50" });
+  const cursor = pages.at(-1);
+  if (cursor) query.set("cursor", cursor);
+  const queryString = query.toString();
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setCatalogError("");
+    api<VaultCatalog>(`${base}/catalog`, { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) setCatalog(data); }, e => { if (!controller.signal.aborted) setCatalogError(e.message); });
+    return () => controller.abort();
+  }, [base, revision]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setPage(null); setError("");
+    if (invalidRange) return;
+    api<VaultPage<ReportMeta>>(`${base}/reports?${queryString}`, { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) setPage(data); }, e => { if (!controller.signal.aborted) setError(e.message); });
+    return () => controller.abort();
+  }, [base, queryString, revision, invalidRange]);
+
+  const change = (key: keyof VaultFilters, value: string) => {
+    setFilters(previous => ({ ...previous, [key]: value })); setPages([null]); setPage(null);
+  };
+  const clear = () => {
+    setFilters(previous => ({ ...previous, template: "", site: "", from: "", to: "" })); setPages([null]); setPage(null);
+  };
+  const filtered = Boolean(filters.template || filters.site || filters.from || filters.to);
+  const siteNames = new Map<string, number>();
+  for (const site of catalog?.sites ?? []) siteNames.set(site.name, (siteNames.get(site.name) ?? 0) + 1);
+  const open = (id: string) => {
+    const pane = root.current?.closest(".pane");
+    scroll.current = pane?.scrollTop ?? 0;
+    setOpenReport(id);
+    pane?.scrollTo({ top: 0 });
+  };
+  if (openReport) return <ReportScreen teamId={teamId} id={openReport} onBack={() => {
+    setOpenReport(null);
+    requestAnimationFrame(() => root.current?.closest(".pane")?.scrollTo({ top: scroll.current }));
+  }} />;
+
+  return <div className="shell" ref={root}>
+    {head}
+    <p className="screen-description">Completed submissions and historical paperwork.</p>
+    <form className="card glass-frosted vault-filters" aria-label="Filter completed paperwork" onSubmit={e => e.preventDefault()}>
+      <label className="field vault-wide">
+        <span className="section-label">Template</span>
+        <select className="vault-input" value={filters.template} onChange={e => change("template", e.target.value)} disabled={!catalog}>
+          <option value="">All templates</option>
+          {catalog?.templates.map(t => <option key={t.id} value={t.id}>{t.name} ({t.reports})</option>)}
+        </select>
+      </label>
+      <label className="field vault-wide">
+        <span className="section-label">Site</span>
+        <select className="vault-input" value={filters.site} onChange={e => change("site", e.target.value)} disabled={!catalog}>
+          <option value="">All sites</option>
+          {catalog?.sites.map(s => <option key={s.id} value={s.id}>{s.name}{s.address ? ` · ${s.address}` : siteNames.get(s.name)! > 1 ? ` · ${s.id.slice(-6)}` : ""} ({s.reports})</option>)}
+        </select>
+      </label>
+      <label className="field">
+        <span className="section-label">From date</span>
+        <input className="vault-input" type="date" value={filters.from} onChange={e => change("from", e.target.value)} />
+      </label>
+      <label className="field">
+        <span className="section-label">To date</span>
+        <input className="vault-input" type="date" value={filters.to} onChange={e => change("to", e.target.value)} />
+      </label>
+      <p className="vault-date-note vault-wide">Work date · {filters.timezone.replaceAll("_", " ")} · both dates included</p>
+      <div className="vault-actions vault-wide">
+        <button className="vault-action" type="button" disabled={!filtered} onClick={clear}>Clear filters</button>
+        <button className="vault-action" type="button" onClick={() => { setPages([null]); setPage(null); setRevision(v => v + 1); }}>Refresh</button>
+      </div>
+    </form>
+    {catalogError && <p className="error" role="alert">Could not load filters. {catalogError}</p>}
+    {invalidRange && <p className="error" role="alert">The end date must be on or after the start date.</p>}
+    {error && <p className="error" role="alert">{error}</p>}
+    {!page && !error && !invalidRange && <p className="empty" role="status">Loading submissions…</p>}
+    {page && <>
+      <div className="group-head" role="status"><span className="group-name">{plural(page.total, "submission")}</span></div>
+      {page.reports.map(r => <button key={r.id} className="card glass-frosted template-card" onClick={() => open(r.id)}>
+        <span className="template-text">
+          <span className="template-name">{r.templateName}</span>
+          <span className="template-meta">{r.siteName}</span>
+          <span className="template-meta">{reportDate(r.performedAt)}{r.byName ? ` · ${r.byName}` : ""}{r.origin ? " · imported" : ""}</span>
+        </span>
+        <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+      </button>)}
+      {page.reports.length === 0 && <div className="empty">
+        <p className="empty-title">{filtered ? "No matching submissions" : "No completed paperwork yet"}</p>
+        <p className="empty-hint">{filtered ? "Change the template, site or date range to see more paperwork." : "Reports filed in Field and completed document imports appear here."}</p>
+      </div>}
+    </>}
+    {(pages.length > 1 || page?.nextCursor) && <nav className="vault-pagination" aria-label="Submission pages">
+      <button className="icon-btn" aria-label="Previous page" disabled={pages.length === 1} onClick={() => { setPages(previous => previous.slice(0, -1)); setPage(null); }}><ChevronLeft /></button>
+      <span>Page {pages.length}</span>
+      <button className="icon-btn" aria-label="Next page" disabled={!page?.nextCursor} onClick={() => { if (page?.nextCursor) { setPages(previous => [...previous, page.nextCursor]); setPage(null); } }}><ChevronRight /></button>
+    </nav>}
+  </div>;
 }
 
 const localNow = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
@@ -1524,7 +1625,10 @@ function ReportScreen({ teamId, id, onBack }: { teamId: string; id: string; onBa
   useEffect(() => {
     api<typeof report>(`/teams/${teamId}/reports/${id}`).then(setReport, (e) => setError(e.message));
   }, [teamId, id]);
-  if (!report) return <div className="shell">{error ? <p className="error">{error}</p> : <p className="empty">Loading…</p>}</div>;
+  if (!report) return <div className="shell">
+    <header className="editor-top"><button className="icon-btn" onClick={onBack} aria-label="Back"><ChevronLeft /></button><h1>Report</h1></header>
+    {error ? <p className="error" role="alert">{error}</p> : <p className="empty" role="status">Loading…</p>}
+  </div>;
   return (
     <div className="shell editor">
       <header className="editor-top">

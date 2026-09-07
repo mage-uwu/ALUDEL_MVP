@@ -60,12 +60,25 @@ you were in comes back on reload. The model sees the last 20 turns. Nothing else
 team data, no tools. Set `XAI_API_KEY` as a secret; until then the pane says so. The Durable Object
 needs no setup; Cloudflare provisions it on deploy.
 
-**Field**: what a crew can file — every template dispatched to a site — and what was filed lately.
+**Field**: forms available to fill — every template dispatched to a site.
 Pick one, fill it (text, numbers with their unit, one key of a buttons block; photos come next),
 say when it was done, and file it. A report can only be filed against a dispatch, so it always
 names a real site and a real template version.
 
-**Vault**: every filed report, append-only, in the team's own SQLite-backed Durable Object
+**Vault**: a separate screen for completed submissions and historical paperwork. Filter by
+template, site, and an inclusive work-date range; browse the full history in pages of 50.
+Opening a report and going back preserves the filters and page. Filter choices come from saved
+reports, so deleting a live site or template does not hide its historical paperwork. Imported
+date-only records retain their written dates; timestamped work uses the viewer's calendar timezone.
+
+`GET /api/teams/:id/vault/catalog` returns saved template/site identities and report counts.
+`GET /api/teams/:id/vault/reports` accepts `template`, `site`, `from`, `to` (YYYY-MM-DD),
+`timezone` (IANA name; defaults to UTC), `limit` (1–100; defaults to 50), and `cursor`.
+It returns `{ reports, total, nextCursor }`. Both date endpoints are included; cursors belong
+to the selected filters. These browsing routes do not change the existing `/reports` or
+`/vault/query` API contracts.
+
+Every filed report is append-only, in the team's own SQLite-backed Durable Object
 (`Vault`, keyed by team id). A report is the record: site, template and version, who, when, the
 filled document and its SHA-256. Each filled block also becomes one typed **fact** row (number in
 `num`, text and the pressed key in `text`, plus label, kind, unit and time), so a labelled block is
@@ -201,7 +214,7 @@ Response: `{ "filed": n, "results": [{ "index", "id" } | { "index", "id", "dupli
 one entry per record in order. A record whose `externalId`, or `sha256` + `page`, was filed before
 comes back as a duplicate with the earlier id, so re-running a batch never files twice. A dispatch
 for the site and template is made on the spot if the app never dispatched it. Imported reports carry
-their `origin` and show as *imported* in Field.
+their `origin` and show as *imported* in Vault.
 
 **From the sidecar's graph export.** `tools/import-graph.mjs` reads the sidecar's graph
 (record → fact → block → template, plus site and employee; classifier nodes are ignored) and

@@ -30,6 +30,7 @@ import {
 } from "./auth";
 import { ensureSchema } from "./schema";
 import { fileImportRecords } from "./import-records";
+import { readVaultBrowse } from "./vault-browse";
 
 
 export interface Env {
@@ -645,7 +646,7 @@ async function teamRoutes(
     return json(await fileImportRecords(env, teamId, user, records, vaultFor(env, teamId)));
   }
 
-  // ——— the field and the vault: what may be filed, filing it, and asking the stack ———
+  // ——— Field: forms available to fill at a site ———
   if (rest === "/dispatches" && req.method === "GET") {
     const { results } = await env.DB.prepare(
       `SELECT d.id, d.site_id AS siteId, s.client_name AS siteName, d.template_id AS templateId,
@@ -665,6 +666,27 @@ async function teamRoutes(
     if (p.get("site")?.match(UUID)) filter.site = p.get("site")!;
     if (p.get("template")?.match(UUID)) filter.template = p.get("template")!;
     return json(await vaultFor(env, teamId).list(filter));
+  }
+  // Vault's filters are based on completed paperwork, even if its live site or
+  // template was deleted. Current object names/addresses help identify options.
+  if (rest === "/vault/catalog" && req.method === "GET") {
+    const [catalog, sites, templates] = await Promise.all([
+      vaultFor(env, teamId).catalog(),
+      env.DB.prepare("SELECT id,client_name AS name,address,location_note FROM sites WHERE team_id = ?").bind(teamId).all<{ id: string; name: string; address: string; location_note: string }>(),
+      env.DB.prepare("SELECT id,name FROM templates WHERE team_id = ?").bind(teamId).all<{ id: string; name: string }>(),
+    ]);
+    const currentSites = new Map(sites.results.map(s => [s.id, s])), currentTemplates = new Map(templates.results.map(t => [t.id, t.name]));
+    const byName = (a: { name: string; id: string }, b: { name: string; id: string }) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+    return json({
+      templates: catalog.templates.map(t => ({ ...t, name: currentTemplates.get(t.id) ?? t.name })).sort(byName),
+      sites: catalog.sites.map(s => ({ ...s, name: currentSites.get(s.id)?.name ?? s.name, address: currentSites.get(s.id)?.address || currentSites.get(s.id)?.location_note || "" })).sort(byName),
+    });
+  }
+  if (rest === "/vault/reports" && req.method === "GET") {
+    let query;
+    try { query = readVaultBrowse(new URL(req.url).searchParams); }
+    catch (e) { return error(422, (e as Error).message); }
+    return json(await vaultFor(env, teamId).browse(query));
   }
   if (rest === "/reports" && req.method === "POST") {
     const body = await readBody(req);
