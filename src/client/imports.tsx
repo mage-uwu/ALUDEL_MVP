@@ -20,6 +20,7 @@ export function Imports({ teamId, head }: { teamId: string; head: React.ReactNod
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [connection, setConnection] = useState("");
+  const [reviewJob, setReviewJob] = useState<string | null>(null);
   const [details, setDetails] = useState<ImportJob | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
@@ -97,14 +98,47 @@ export function Imports({ teamId, head }: { teamId: string; head: React.ReactNod
       <p className="template-meta">{new Date(job.createdAt).toLocaleString()}</p>
       {["processing", "importing"].includes(job.state) && <progress aria-label={job.state === "importing" ? "Filing records" : "Processing documents"} max={100} value={job.percent} />}
       <p role="status">{job.message}</p>
-      {job.total > 0 && <p className="template-meta">{job.processed}/{job.total} records · {job.filed} filed · {job.duplicates} already present · {job.rejected} rejected</p>}
+      {job.total > 0 && <p className="template-meta">{job.processed}/{job.total} records · {job.filed} filed · {job.duplicates} already present · {job.pending ?? 0} awaiting review · {job.rejected} rejected</p>}
       {job.rejected > 0 && <button className="big-btn" onClick={() => inspect(job)}>View rejected records</button>}
-      {job.resumable && <button className="big-btn" onClick={() => resume(job)}>Resume filing</button>}
+      {(job.pending ?? 0) > 0 && job.state === "complete" && <button className="big-btn" onClick={() => setReviewJob(job.id)}>Review documents</button>}
+      {job.resumable && <button className="big-btn" onClick={() => resume(job)}>Resume import</button>}
     </section>)}
+    {reviewJob && <PendingDocuments base={base} jobId={reviewJob} teamId={teamId} close={() => setReviewJob(null)} />}
     {details && <section className="card glass-frosted import-panel" aria-label="Rejected records">
       <div className="import-title"><strong>Rejected records</strong><button onClick={() => setDetails(null)} aria-label="Close rejected records">Close</button></div>
       <p className="template-meta">Showing up to 50 records. Correct these in the source and upload again; previously filed records will be recognized.</p>
       {details.errors?.map((e, i) => <p key={i}><strong>{e.record}</strong><br />{e.error}</p>)}
     </section>}
   </div>;
+}
+
+
+type PendingRow = {seq:number;record:string;reason:string};
+type PendingDocument = {source?:{values:Record<string,unknown>};fieldLabels?:Record<string,string>;siteId:string|null;reason:string;origin?:{externalId?:string};semantics?:{client:{name:string|null};date:{value:string}|null};fields?:Array<{label:string;value:unknown}>;values?:Record<string,unknown>};
+function PendingDocuments({base,jobId,teamId,close}:{base:string;jobId:string;teamId:string;close:()=>void}) {
+  const [rows,setRows]=useState<PendingRow[]>([]),[sites,setSites]=useState<Array<{id:string;clientName:string;address:string}>>([]);
+  const [selected,setSelected]=useState<{seq:number;doc:PendingDocument}|null>(null),[site,setSite]=useState(""),[date,setDate]=useState("");
+  const [problem,setProblem]=useState(""),[saving,setSaving]=useState(false);
+  const path=`${base}/${jobId}/pending`;
+  const refresh=async(after=-1)=>setRows(await request<PendingRow[]>(`${path}?after=${after}`));
+  useEffect(()=>{let stopped=false; void Promise.all([request<PendingRow[]>(path),request<Array<{id:string;clientName:string;address:string}>>(`/api/teams/${teamId}/sites`)])
+    .then(([r,s])=>{if(!stopped){setRows(r);setSites(s);}}).catch(e=>{if(!stopped)setProblem((e as Error).message);});return()=>{stopped=true;};},[path,teamId]);
+  async function open(row:PendingRow){try{const doc=await request<PendingDocument>(`${path}/${row.seq}`);setSelected({seq:row.seq,doc});setSite(doc.siteId ?? "");setDate("");setProblem("");}catch(e){setProblem((e as Error).message);}}
+  async function file(){if(!selected)return;setSaving(true);setProblem("");try{await request(`${path}/${selected.seq}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({siteId:site,...(date?{date}:{})})});setSelected(null);await refresh();}catch(e){setProblem((e as Error).message);}finally{setSaving(false);}}
+  return <section className="card glass-frosted import-panel" aria-label="Manual document sorting">
+    <div className="import-title"><h3>Documents awaiting review</h3><button onClick={close}>Close</button></div>
+    {problem && <p role="alert" className="error">{problem}</p>}
+    {rows.length===0 && <p>No documents awaiting review.</p>}
+    {rows.map(row=><button key={row.seq} className="big-btn" onClick={()=>open(row)}>{row.record} · {row.reason}</button>)}
+    {rows.length===50 && <button onClick={()=>refresh(rows.at(-1)!.seq).catch(e=>setProblem((e as Error).message))}>Next documents</button>}
+    {selected && <div>
+      <h3>{selected.doc.semantics?.client.name || selected.doc.origin?.externalId || "Document"}</h3>
+      <p>{selected.doc.reason}</p>
+      <dl>{(selected.doc.fields ?? Object.entries(selected.doc.source?.values ?? selected.doc.values ?? {}).map(([label,value])=>({label:selected.doc.fieldLabels?.[label] || label,value}))).map((f,i)=><div key={i}><dt>{f.label}</dt><dd>{typeof f.value === "object" ? JSON.stringify(f.value) : String(f.value ?? "")}</dd></div>)}</dl>
+      <label className="import-label">Site<select value={site} onChange={e=>setSite(e.target.value)}><option value="">Choose a site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.clientName} · {s.address}</option>)}</select></label>
+      <p className="template-meta">Document date: {selected.doc.semantics?.date?.value || "Unknown"}</p>
+      <label className="import-label">Set or correct the date<input type="date" value={date} onChange={e=>setDate(e.target.value)} /></label>
+      <button className="big-btn primary" disabled={saving || !site} onClick={file}>{saving?"Filing…":"File at this site"}</button>
+    </div>}
+  </section>;
 }

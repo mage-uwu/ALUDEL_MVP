@@ -170,6 +170,21 @@ async function teamRoutes(
     }
     return error(405, "Method not allowed");
   }
+  const pendingImport = rest.match(new RegExp(`^/breakfast/jobs/(${UUID})/pending(?:/(\\d+))?$`));
+  if (pendingImport) {
+    const vault=vaultFor(env,teamId), id=pendingImport[1]!, seq=pendingImport[2] === undefined ? null : Number(pendingImport[2]);
+    if (req.method === "GET") {
+      const result=seq === null ? await vault.pendingImports(id,Math.max(-1,Number(new URL(req.url).searchParams.get("after")) || -1)) : await vault.pendingImport(id,seq);
+      return result ? json(typeof result === "string" ? JSON.parse(result) : result) : error(404,"Not found");
+    }
+    if (req.method === "POST" && seq !== null) {
+      const body=await readBody(req);
+      if (typeof body?.siteId !== "string" || !new RegExp(`^${UUID}$`).test(body.siteId) || (body.date !== undefined && typeof body.date !== "string")) return error(422,"Choose a site and a valid document date");
+      try { return json(await vault.resolvePendingImport(id,seq,body.siteId,body.date as string | undefined)); }
+      catch(e) { return error(422,e instanceof Error ? e.message : "Could not file this document"); }
+    }
+    return error(405,"Method not allowed");
+  }
   const importJob = rest.match(new RegExp(`^/breakfast/jobs/(${UUID})(/resume)?$`));
   if (importJob) {
     const vault = vaultFor(env, teamId);
@@ -181,7 +196,7 @@ async function teamRoutes(
       const existing = await vault.importJob(importJob[1]!);
       if (!existing) return error(404, "Not found");
       const job = await vault.resumeImport(importJob[1]!);
-      return job ? json(job) : error(409, "This import has no paused records to resume");
+      return job ? json(job) : error(409, "This import has no saved progress to resume");
     }
     return error(405, "Method not allowed");
   }

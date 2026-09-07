@@ -37,21 +37,24 @@ export async function breakfast(env: Env, path: string, init: RequestInit = {}, 
     await response.body?.cancel();
     const message = response.status === 429 ? "Document processing is busy. Try a new upload after the indicated delay."
       : response.status === 401 || response.status === 403 ? "Document import credentials were rejected. Ask an administrator to check the connection."
-      : response.status === 413 ? "Upload exceeds 64 MiB"
-      : `Document service returned HTTP ${response.status}`;
+        : response.status === 413 ? "Upload exceeds 64 MiB"
+          : `Document service returned HTTP ${response.status}`;
     throw new BreakfastError(message, response.status, response.headers.get("retry-after"));
   }
-  // Leave headroom for parsed graph objects inside a 128 MiB Worker isolate.
+  // Import pages are bounded to 1 MiB by the producer. The graph limit remains
+  // for explicit legacy callers; the import queue never buffers a whole graph.
   const max = path.endsWith("/graph") ? 16 * 1024 * 1024 : 1024 * 1024;
   const reader = response.body?.getReader();
   if (!reader) throw new BreakfastError("Document service returned an empty response");
   const decoder = new TextDecoder(); let raw = "", bytes = 0;
-  while (true) {
-    const { done, value } = await reader.read(); if (done) break;
-    bytes += value.byteLength;
-    if (bytes > max) { await reader.cancel(); throw new BreakfastError("The processed result is too large. Split the source into smaller uploads.", 422); }
-    raw += decoder.decode(value, { stream: true });
-  }
+  try {
+    while (true) {
+      const { done, value } = await reader.read(); if (done) break;
+      bytes += value.byteLength;
+      if (bytes > max) { throw new BreakfastError(path.endsWith("/graph") ? "The processed result is too large. Split the source into smaller uploads." : "Document service returned an oversized response page", 422); }
+      raw += decoder.decode(value, { stream: true });
+    }
+  } finally { await reader.cancel().catch(() => { }); reader.releaseLock(); }
   raw += decoder.decode();
   try {
     const value: unknown = JSON.parse(raw);

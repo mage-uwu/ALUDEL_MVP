@@ -6,9 +6,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { QUERY_LIMITS, type BlockKind, type Filled, type Origin, type VaultQuery } from "../shared/model";
 import type { Env } from "./index";
+import type { BreakfastSemantics } from "../shared/breakfast";
 import { BreakfastImports } from "./breakfast-imports";
 
 export type ReportMeta = {
+  semantics?: BreakfastSemantics | null;
   id: string;
   siteId: string;
   siteName: string;
@@ -26,8 +28,8 @@ export type ReportMeta = {
   origin: Origin | null;
 };
 export type Report = ReportMeta & { doc: Filled };
-type Row = Omit<ReportMeta, "origin"> & { origin: string | null };
-const withOrigin = (r: Row): ReportMeta => ({ ...r, origin: r.origin ? (JSON.parse(r.origin) as Origin) : null });
+type Row = Omit<ReportMeta, "origin" | "semantics"> & { origin: string | null; semantics?: string | null };
+const withOrigin = (r: Row): ReportMeta => ({ ...r, semantics: r.semantics ? JSON.parse(r.semantics) : null, origin: r.origin ? (JSON.parse(r.origin) as Origin) : null });
 export type Fact = {
   seq: number;
   taskId: string;
@@ -61,7 +63,7 @@ export function factsOf(doc: Filled): Fact[] {
 
 const META = `r.id, r.site_id AS siteId, r.site_name AS siteName, r.template_id AS templateId, r.template_name AS templateName,
   r.template_version AS templateVersion, r.dispatch_id AS dispatchId, r.by_user AS byUser, r.by_name AS byName,
-  r.performed_at AS performedAt, r.submitted_at AS submittedAt, r.hash, r.facts, r.origin`;
+  r.performed_at AS performedAt, r.submitted_at AS submittedAt, r.hash, r.facts, r.origin, r.semantics`;
 
 const like = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
@@ -149,7 +151,7 @@ export class Vault extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS facts_site ON facts(site_id, performed_at);
     `);
     // vaults made before provenance existed still need the columns
-    for (const sql of ["ALTER TABLE reports ADD COLUMN origin TEXT", "ALTER TABLE reports ADD COLUMN origin_key TEXT"]) {
+    for (const sql of ["ALTER TABLE reports ADD COLUMN semantics TEXT", "ALTER TABLE reports ADD COLUMN origin TEXT", "ALTER TABLE reports ADD COLUMN origin_key TEXT"]) {
       try {
         this.sql.exec(sql);
       } catch {
@@ -165,6 +167,9 @@ export class Vault extends DurableObject<Env> {
   importJobs() { return this.imports.list(); }
   importJob(id: string) { return this.imports.get(id); }
   resumeImport(id: string) { return this.imports.resume(id); }
+  pendingImports(id: string, after: number) { return this.imports.pending(id,after); }
+  pendingImport(id: string, seq: number): string | null { const doc=this.imports.pendingDocument(id,seq); return doc ? JSON.stringify(doc) : null; }
+  resolvePendingImport(id: string, seq: number, siteId: string, date?: string) { return this.imports.resolvePending(id,seq,siteId,date); }
 
   /** No await between the duplicate lookup and insert: atomic in one DO turn. */
   addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null): { id: string; duplicate?: true } {
@@ -184,11 +189,11 @@ export class Vault extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(
         `INSERT INTO reports (id, site_id, site_name, template_id, template_name, template_version, dispatch_id, by_user, by_name,
-                              performed_at, submitted_at, hash, facts, doc, origin, origin_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                              performed_at, submitted_at, hash, facts, doc, origin, origin_key, semantics)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         meta.id, meta.siteId, meta.siteName, meta.templateId, meta.templateName, meta.templateVersion, meta.dispatchId,
         meta.byUser, meta.byName, meta.performedAt, meta.submittedAt, meta.hash, facts.length, JSON.stringify(doc),
-        meta.origin ? JSON.stringify(meta.origin) : null, originKey
+        meta.origin ? JSON.stringify(meta.origin) : null, originKey, meta.semantics ? JSON.stringify(meta.semantics) : null
       );
       for (const f of facts)
         this.sql.exec(

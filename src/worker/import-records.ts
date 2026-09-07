@@ -20,6 +20,7 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
   type SiteRow = { id: string; name: string };
   type TplRow = { id: string; name: string; version: number; doc: string; template: Template };
   const sites = new Map<string, Promise<SiteRow | null>>();
+  const dispatches=new Map<string,{id:string}>();
   const templates = new Map<string, Promise<TplRow | null>>();
   const siteOf = (id: string) =>
     sites.get(id) ??
@@ -67,6 +68,13 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
       fail("Nothing filled in");
       continue;
     }
+    if (rec.siteBinding !== undefined) {
+      const filled=new Map(doc.tasks.flatMap(t=>t.blocks).map(b=>[b.id,b.value]));
+      const entries=Object.entries((rec.values ?? {}) as Record<string,unknown>).filter(([,v])=>v !== null && v !== "");
+      if (entries.some(([id,value])=>!filled.has(id) || filled.get(id) !== (typeof value === "string" ? value.trim() : value))) {
+        fail("Some fields do not fit this template; review the complete saved document"); continue;
+      }
+    }
     const date = semantics ? semantics.date?.value ?? null : rec.performedAt;
     const performed = typeof date === "string" ? Date.parse(date) : NaN;
     // old paperwork may be older than the field's five-year window, but not older than the epoch
@@ -74,22 +82,18 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
       fail("performedAt: a past date");
       continue;
     }
-    // the record files against a dispatch, made on the spot when this site was never dispatched in the app
-    let dispatch = await env.DB.prepare("SELECT id FROM dispatches WHERE site_id = ? AND template_id = ?")
-      .bind(site.id, tpl.id)
-      .first<{ id: string }>();
+    const dispatchKey=`${site.id}:${tpl.id}`;
+    let dispatch=dispatches.get(dispatchKey);
     if (!dispatch) {
-      dispatch = { id: crypto.randomUUID() };
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO dispatches (id, team_id, site_id, template_id, template_version, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
-      )
-        .bind(dispatch.id, teamId, site.id, tpl.id, tpl.version, user.id, nowIso())
-        .run();
+      dispatch=await env.DB.prepare("SELECT id FROM dispatches WHERE team_id = ? AND site_id = ? AND template_id = ?").bind(teamId,site.id,tpl.id).first<{id:string}>() ?? undefined;
+      if (!dispatch) {
+        await env.DB.prepare(`INSERT OR IGNORE INTO dispatches (id, team_id, site_id, template_id, template_version, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .bind(crypto.randomUUID(),teamId,site.id,tpl.id,tpl.version,user.id,nowIso()).run();
+        dispatch=await env.DB.prepare("SELECT id FROM dispatches WHERE team_id = ? AND site_id = ? AND template_id = ?").bind(teamId,site.id,tpl.id).first<{id:string}>() ?? undefined;
+      }
+      if (!dispatch) throw new Error("Dispatch creation failed");
+      dispatches.set(dispatchKey,dispatch);
     }
-    // Another importer may have created the unique site/template dispatch.
-    dispatch = await env.DB.prepare("SELECT id FROM dispatches WHERE site_id = ? AND template_id = ?")
-      .bind(site.id, tpl.id).first<{ id: string }>();
-    if (!dispatch) throw new Error("Dispatch creation failed");
     const bytes = new TextEncoder().encode(JSON.stringify(doc));
     const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
     const added = await vault.addImported(
@@ -107,6 +111,7 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
         submittedAt: nowIso(),
         hash,
         origin,
+        semantics,
       },
       doc,
       key
