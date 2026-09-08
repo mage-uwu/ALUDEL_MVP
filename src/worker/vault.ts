@@ -9,9 +9,10 @@ import type { Env } from "./index";
 import type { BreakfastSemantics } from "../shared/breakfast";
 import { BreakfastImports } from "./breakfast-imports";
 import { PdfStore } from "./pdf-store";
-import type { VaultCatalog, VaultPage } from "../shared/vault";
+import type { VaultCatalog, VaultDeleteResult, VaultPage } from "../shared/vault";
 import { vaultCursor, vaultWhere, type VaultBrowse } from "./vault-browse";
 import type { ImportHistory } from "../shared/import-history";
+import { fileImportRecords } from "./import-records";
 
 export type ReportMeta = {
   semantics?: BreakfastSemantics | null;
@@ -128,6 +129,7 @@ export class Vault extends DurableObject<Env> {
   private sql: SqlStorage;
   private imports: BreakfastImports;
   private pdfs: PdfStore;
+  private importOperations = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -173,17 +175,44 @@ export class Vault extends DurableObject<Env> {
   }
 
   // Only the authenticated Worker can reach this object; its namespace is per team.
-  fetch(req: Request): Promise<Response> { return this.imports.start(req); }
-  alarm(): Promise<void> { return this.imports.alarm(); }
+  // An import can be awaiting D1 or PDF verification even after its last saved
+  // state is complete/failed. Prevent a reset from racing those continuations.
+  private async duringImport<T>(work: () => Promise<T>): Promise<T> {
+    this.importOperations++;
+    try { return await work(); } finally { this.importOperations--; }
+  }
+  fetch(req: Request): Promise<Response> { return this.duringImport(() => this.imports.start(req)); }
+  alarm(): Promise<void> { return this.duringImport(() => this.imports.alarm()); }
   importJobs() { return this.imports.list(); }
   importJob(id: string) { return this.imports.get(id); }
-  resumeImport(id: string) { return this.imports.resume(id); }
+  resumeImport(id: string) { return this.duringImport(() => this.imports.resume(id)); }
   pendingImports(id: string, after: number) { return this.imports.pending(id,after); }
   pendingImport(id: string, seq: number): string | null { const doc=this.imports.pendingDocument(id,seq); return doc ? JSON.stringify(doc) : null; }
-  resolvePendingImport(id: string, seq: number, siteId: string, date?: string) { return this.imports.resolvePending(id,seq,siteId,date); }
+  resolvePendingImport(id: string, seq: number, siteId: string, date?: string) { return this.duringImport(() => this.imports.resolvePending(id,seq,siteId,date)); }
+  importRecords(teamId: string, user: { id: string; name: string }, recordsJson: string) {
+    return this.duringImport(() => fileImportRecords(this.env, teamId, user, JSON.parse(recordsJson), this));
+  }
+
+  /** Temporary beta reset. No await between the busy check and the full deletion. */
+  deleteAll(): VaultDeleteResult | { error: string } {
+    if (this.importOperations || this.imports.hasActiveWork()) {
+      return { error: "An import is still running. Wait for it to finish or pause, then delete all again." };
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const deletedReports = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM reports").toArray()[0]!.n;
+      this.sql.exec("DELETE FROM facts; DELETE FROM report_history; DELETE FROM reports;");
+      const deletedImports = this.imports.clear();
+      this.pdfs.clear();
+      return { deletedReports, deletedImports };
+    });
+  }
 
   /** No await between the duplicate lookup and insert: atomic in one DO turn. */
-  async addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null, history?: ImportHistory): Promise<{ id: string; duplicate?: true; error?: string }> {
+  addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null, history?: ImportHistory): Promise<{ id: string; duplicate?: true; error?: string }> {
+    return this.duringImport(() => this.storeImported(meta, doc, key, history));
+  }
+
+  private async storeImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null, history?: ImportHistory): Promise<{ id: string; duplicate?: true; error?: string }> {
     if(history?.sourceDocument?.mediaType === "application/pdf") {
       try {await this.pdfs.verify(history.sourceDocument);} catch(e) {return {id:meta.id,error:(e as Error).message};}
     }

@@ -1068,6 +1068,12 @@ body {
 .vault-actions, .vault-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .vault-action { border: 0; background: none; padding: 8px 0; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
 .vault-action:disabled { color: var(--muted); opacity: .55; cursor: default; }
+.vault-reset { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.vault-action.danger { color: #b3261e; }
+.vault-delete-dialog { border: 0; background: #fff; width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; box-sizing: border-box; }
+.vault-delete-dialog::backdrop { background: rgba(24, 28, 34, .4); }
+.vault-delete-dialog .modal-actions { margin-top: 20px; }
+.vault-delete-dialog .field { font-size: 14px; }
 .vault-pagination { font-size: 13px; color: var(--muted); }
 .history-record { padding: 18px; min-width: 0; }
 .history-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }

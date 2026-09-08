@@ -6,6 +6,8 @@ export class PdfStore {
     sql.exec(`CREATE TABLE IF NOT EXISTS pdf_sources (id TEXT PRIMARY KEY, bytes INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS pdf_chunks (id TEXT NOT NULL, part INTEGER NOT NULL, sha256 TEXT NOT NULL, data BLOB NOT NULL, PRIMARY KEY(id,part));`);
   }
+  /** Called inside the Vault reset transaction, after report/import references. */
+  clear(): void { this.sql.exec("DELETE FROM pdf_chunks; DELETE FROM pdf_sources;"); }
   /** Caller validates each chunk before entering the transfer's SQLite transaction. */
   stage(c: SourceChunk, bytes: Uint8Array) {
     const previous=this.sql.exec<{bytes:number}>("SELECT bytes FROM pdf_sources WHERE id=?",c.id).toArray()[0];
