@@ -1,5 +1,6 @@
 import { IMPORT_MAX_BYTES, type ImportJob } from "../shared/breakfast";
-import { normalizePlace, normalizeTemplate } from "../shared/model";
+import { normalizeTemplate } from "../shared/model";
+import { saveImportedSite } from "./site-contacts";
 import { breakfast, breakfastKey, BreakfastError, limitStream, uploadHeaders } from "./breakfast-api";
 import { type ImportItem } from "./graph-import";
 import { readTransferPage, planTransferPage, type TransferRow } from "./import-transfer";
@@ -276,9 +277,7 @@ export class BreakfastImports {
         await this.env.DB.prepare("INSERT INTO templates (id,team_id,name,version,doc,updated_at) VALUES (?,?,?,1,?,?) ON CONFLICT(id) DO NOTHING")
           .bind(p.id, row.team_id, template.name, JSON.stringify({ tasks: template.tasks }), now()).run();
       } else if (item.kind === "site") {
-        const place = normalizePlace(p.place);
-        await this.env.DB.prepare("INSERT INTO sites (id,team_id,client_name,address,place,location_note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING")
-          .bind(p.id, row.team_id, p.clientName, place?.formattedAddress ?? p.locationNote, place ? JSON.stringify(place) : null, p.locationNote, now(), now()).run();
+        await saveImportedSite(this.env, row.team_id, p);
       } else {
         records.push({seq:item.seq,payload:p}); continue;
       }

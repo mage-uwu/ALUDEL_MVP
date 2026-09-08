@@ -3,11 +3,12 @@ import { LIMITS, normalizePlace, normalizeTemplate, type BlockKind } from "../sh
 import { paperTime } from "./paper-time";
 import type { ImportItem } from "./graph-import";
 import { HISTORY_MAX_BYTES, type ImportHistory } from "../shared/import-history";
+import { siteClient } from "../shared/site-contacts";
 
 type Props = Record<string, unknown>;
 export interface TemplateMapping { id: string; blocks: Record<string, { id: string; kind: BlockKind; label?: string }> }
 export interface SourceTemplate { id: string; name: string; sortStatus?: string; formatIdentity?: string[]; blocks: Array<{ id: string; label: string; valueKind: string; options: unknown[]; identity?: string; canonicalLabel?: string; semanticRole?: string; semanticConfidence?:number; unit?: string }> }
-export interface SourceSite { id: string; address: unknown; clientName: unknown; place: unknown; sourceAddress?: string }
+export interface SourceSite { id: string; address: unknown; clientName: unknown; place: unknown; sourceAddress?: string; client?: unknown }
 const text = (v: unknown) => typeof v === "string" ? v.trim() : "";
 const clean = (v: unknown) => typeof v === "string" ? v.replace(/^[•\s]+/, "").trim() : v;
 
@@ -54,7 +55,9 @@ export async function mapSite(source: SourceSite, teamId: string, jobId: string)
   const address = text(source.address), place = normalizePlace(source.place);
   const key = source.sourceAddress !== undefined ? source.id : place?.googlePlaceId || address.toLowerCase().replace(/\s+/g, " ") || `${jobId}:${source.id}`;
   const id = await uuid(`${teamId}:site:${key}`);
-  return { id, item: bounded({ kind: "site", payload: { id, clientName: (text(source.clientName) || address || "Imported site").slice(0, 80), locationNote: address.slice(0, 240), place } }) };
+  const client = siteClient(source.client);
+  return { id, item: bounded({ kind: "site", payload: { id, clientName: (client?.name || text(source.clientName) || address || "Imported site").slice(0, 80),
+    address: (place?.formattedAddress || address).slice(0, 240), locationNote: "", place, emails: client?.emails ?? [], phones: client?.phones ?? [] } }) };
 }
 
 export function mapRecord(source: Props, template: TemplateMapping | undefined, siteId: string | undefined, timezone: string): ImportItem {

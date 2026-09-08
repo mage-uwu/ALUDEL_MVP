@@ -9,9 +9,10 @@ invalid states are unrepresentable, and the server re-validates every document t
 `src/shared/model.ts` gate before it touches the database. A save names the version it was
 edited from, so two people on the same template get a 409 instead of silently overwriting each other.
 
-**Sites**: Lists → Worksites → Dispatches. A worksite is a client name, a location and up to ten
-contact emails, sitting in at most one list (lists are containers of worksites). A location is a
-real Google place, not typed text: picked with the current Places autocomplete, plotted on a map,
+**Sites**: Lists → Worksites → Dispatches. A worksite is a client name, an address, up to ten
+contact emails and up to ten phone numbers, sitting in at most one list (lists are containers
+of worksites). Addresses can be retained as text before selecting a Google place.
+A place is picked with the current Places autocomplete, plotted on a map,
 and stored as a normalized `AludelPlace` record (place id, name, formatted address, lat/lng,
 viewport, address parts, fetch time) that the server re-validates through `normalizePlace`. Dispatching *borrows* a
 template for a worksite: the dispatch references the template rather than copying it, records the
@@ -163,8 +164,9 @@ Template IDs use stable field identities, types and explicit format discriminato
 compatible existing templates retain their tasks, units, options and versions.
 Aludel sends existing site profiles to Breakfast's binder so resolved records reuse
 the team's worksite IDs. Records use the source `externalId` for deduplication.
-Existing templates/sites are never overwritten. Address-only sites retain their
-source address for the place picker. Identifier fields and constants stay text,
+Existing templates and edited site details remain authoritative. Imports fill missing
+site details and extend contacts previously managed by imports. Address-only sites
+retain their source address for the place picker. Identifier fields and constants stay text,
 choices keep their keys, and dates retain their resolved precision. Native records
 without a site or valid date remain complete in the team's manual review queue.
 Historical field values do not have to fit the generated template.
@@ -435,6 +437,19 @@ profile part; contacts belonging to employees/users remain separate from clients
 Each site/template pair has one dispatch: 60 reports of one format at four sites
 create one template and four stacks. Replayed documents use the existing origin
 idempotency key. Filing batches reuse site, template and dispatch lookups.
+
+Native site rows carry the resolved `client` contract. Client names, service addresses,
+emails and phones populate the D1 site directory; older producers can supply these
+through record semantics. Staff and uploader contacts never become client contacts.
+Email casing and phone formatting are deduplicated, and saved phones are included in
+the existing-site profiles sent back to Breakfast. Import-managed contact lists can
+gain aliases; changing or clearing a list manually makes that list authoritative.
+
+For already imported history, an owner/admin can use **Sites → Update sites from
+Vault**. It fills missing details from the saved client semantics of approved reports,
+25 sites per request. It preserves edited site details, skips deleted sites, and does
+not rewrite paperwork or rerun classification. Reports lacking resolved semantics
+cannot supply these details automatically.
 
 Unresolved documents are saved in the team's SQLite Vault, including original
 values, provenance, binding evidence and unknown dates. **Review documents** on an

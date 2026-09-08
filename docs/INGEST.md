@@ -17,6 +17,21 @@ is indistinguishable from a field report except for its `origin`.
 
 ## The gate
 
+Native Breakfast imports also populate the assigned site's `clientName`, `address`,
+`emails` and `phones` from resolved client ownership. The site-row contract supplies
+contacts before records arrive; record semantics support older producers and direct
+`/import` callers. Only successfully filed or matching duplicate records contribute.
+An existing source ID assigned to a different site requires review. Employees/users
+remain separate, and original history is unchanged.
+
+`POST /api/teams/:id/sites/recover-contacts` accepts `{after?: string|null}` and returns
+`{processedSites, updatedSites, nextCursor}` for up to 25 saved sites. Repeat with the
+returned cursor until null. This owner/admin session route is exposed by **Sites →
+Update sites from Vault**; integration tokens cannot call it. Recovery uses only
+saved import semantics, fills missing details, preserves manual contact edits and
+does not recreate deleted sites. Site POST/PATCH accepts `phones: string[]`; PATCH
+preserves the current phone/address fields when older clients omit them.
+
 **Auth.** An integration token (`Members → Integrations`, shown once, stored as
 SHA-256 in D1 `tokens`) is `Authorization: Bearer aludel_<43 url-safe chars>`.
 It acts as a *member* of exactly one team: `/api/teams/<its team>/…` only; no

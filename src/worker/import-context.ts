@@ -2,6 +2,7 @@ import { normalizeTemplate, parsePlace } from "../shared/model";
 import type { Env } from "./index";
 import type { SourceSite, SourceTemplate } from "./import-plan";
 import { mapSite, mapTemplate } from "./import-plan";
+import { contactEmails, contactPhones, storedContacts } from "../shared/site-contacts";
 
 const key = (v: string) => v.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 
@@ -57,14 +58,15 @@ export async function withSiteProfiles(env: Env, teamId: string, headers: Header
   const type = headers.get("content-type") ?? "", match = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(type);
   const boundary = match?.[1] ?? match?.[2];
   if (!boundary || boundary.length > 200 || /[\r\n]/.test(boundary)) throw new Error("Invalid multipart boundary");
-  const rows = await env.DB.prepare("SELECT id,client_name,address,location_note,place,emails FROM sites WHERE team_id = ? ORDER BY id")
-    .bind(teamId).all<{ id: string; client_name: string; address: string; location_note: string; place: string | null; emails: string }>();
+  const rows = await env.DB.prepare("SELECT id,client_name,address,location_note,place,emails,phones FROM sites WHERE team_id = ? ORDER BY id")
+    .bind(teamId).all<{ id: string; client_name: string; address: string; location_note: string; place: string | null; emails: string; phones: string }>();
   if (!rows.results.length) return body;
   const sites = rows.results.map(s => {
     const place = parsePlace(s.place), address = place?.formattedAddress || s.address || s.location_note;
     return { siteId: s.id, observations: [{ recordId: `aludel:${s.id}`, anchor: true, fields: {
       service_address: address ? [address] : [], client_name: s.client_name ? [s.client_name] : [],
-      client_email: JSON.parse(s.emails || "[]").filter((v: unknown) => typeof v === "string"),
+      client_email: contactEmails(storedContacts(s.emails)),
+      client_phone: contactPhones(storedContacts(s.phones)),
     } }] };
   });
   const encoded = new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, sites }));
