@@ -31,6 +31,7 @@ import {
 import { ensureSchema } from "./schema";
 import { readVaultBrowse } from "./vault-browse";
 import { VAULT_DELETE_CONFIRMATION } from "../shared/vault";
+import { contactEmails, contactPhones, storedContacts } from "../shared/site-contacts";
 
 
 export interface Env {
@@ -97,18 +98,7 @@ async function readBody(req: Request, max: number = LIMITS.body): Promise<Record
 const field = (v: unknown, max: number): string =>
   typeof v === "string" ? v.trim().slice(0, max) : "";
 
-/** Up to 10 valid, lower-cased, de-duplicated addresses; anything else is dropped. */
-const emailsOf = (v: unknown): string[] => {
-  if (!Array.isArray(v)) return [];
-  const out: string[] = [];
-  for (const x of v) {
-    if (typeof x !== "string") continue;
-    const e = x.trim().toLowerCase();
-    if (e.length <= 160 && EMAIL_RE.test(e) && !out.includes(e)) out.push(e);
-    if (out.length >= 10) break;
-  }
-  return out;
-};
+const emailsOf = contactEmails;
 
 const parseEmails = (raw: unknown): string[] => {
   try {
@@ -337,14 +327,14 @@ async function teamRoutes(
       const { results } = await env.DB.prepare(
         `SELECT s.id, s.client_name AS clientName, s.address, s.place, s.position, s.emails,
                 s.list_id AS listId, l.name AS listName,
-                (SELECT COUNT(*) FROM dispatches d WHERE d.site_id = s.id) AS dispatches
+                s.phones, (SELECT COUNT(*) FROM dispatches d WHERE d.site_id = s.id) AS dispatches
          FROM sites s LEFT JOIN lists l ON l.id = s.list_id
          WHERE s.team_id = ?
          ORDER BY l.name IS NULL, l.name, s.position, s.client_name`
       )
         .bind(teamId)
         .all();
-      return json(results.map((r) => ({ ...r, place: parsePlace(r.place), emails: parseEmails(r.emails) })));
+      return json(results.map((r) => ({ ...r, place: parsePlace(r.place), emails: parseEmails(r.emails), phones: contactPhones(storedContacts(r.phones)) })));
     }
     if (req.method === "POST") {
       const body = await readBody(req);
@@ -355,18 +345,19 @@ async function teamRoutes(
       if (place === undefined) return error(422, "Invalid place");
       const id = crypto.randomUUID();
       await env.DB.prepare(
-        `INSERT INTO sites (id, team_id, list_id, client_name, address, place, location_note, emails, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO sites (id, team_id, list_id, client_name, address, place, location_note, emails, phones, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(
           id,
           teamId,
           listId,
           clientName,
-          place?.formattedAddress ?? "",
+          place?.formattedAddress || field(body?.address, 240),
           place ? JSON.stringify(place) : null,
           field(body?.locationNote, 240),
           JSON.stringify(emailsOf(body?.emails)),
+          JSON.stringify(contactPhones(body?.phones)),
           nowIso(),
           nowIso()
         )
@@ -374,6 +365,13 @@ async function teamRoutes(
       return json({ id }, 201);
     }
     return error(405, "Method not allowed");
+  }
+
+  if (rest === "/sites/recover-contacts" && req.method === "POST") {
+    if (!admin) return error(403, "Admins only");
+    const body = await readBody(req, 1024);
+    if (!body || (body.after !== undefined && body.after !== null && (typeof body.after !== "string" || body.after.length > 256))) return error(422, "Invalid recovery cursor");
+    return json(await vaultFor(env, teamId).recoverSiteContacts(teamId, typeof body.after === "string" ? body.after : ""));
   }
 
   // the order of one list's sites (null: the unlisted ones), as the ids in order
@@ -404,12 +402,12 @@ async function teamRoutes(
 
     if (!onDispatches && req.method === "GET") {
       const row = await env.DB.prepare(
-        `SELECT id, client_name AS clientName, address, place, location_note AS locationNote, emails,
+        `SELECT id, client_name AS clientName, address, place, location_note AS locationNote, emails, phones,
                 list_id AS listId
          FROM sites WHERE id = ?`
       )
         .bind(siteId)
-        .first<{ emails: string; place: string | null }>();
+        .first<{ emails: string; phones: string; place: string | null }>();
       const { results: dispatches } = await env.DB.prepare(
         `SELECT d.id, d.template_id AS templateId, t.name AS templateName,
                 d.template_version AS templateVersion, t.version AS currentVersion,
@@ -419,7 +417,7 @@ async function teamRoutes(
       )
         .bind(siteId)
         .all();
-      return json({ ...row, place: parsePlace(row?.place), emails: parseEmails(row?.emails), dispatches });
+      return json({ ...row, place: parsePlace(row?.place), emails: parseEmails(row?.emails), phones: contactPhones(storedContacts(row?.phones)), dispatches });
     }
 
     if (!onDispatches && req.method === "PATCH") {
@@ -432,16 +430,17 @@ async function teamRoutes(
       const place = placeOf(body.place);
       if (place === undefined) return error(422, "Invalid place");
       await env.DB.prepare(
-        `UPDATE sites SET client_name = ?, address = ?, place = ?, location_note = ?, emails = ?, list_id = ?,
+        `UPDATE sites SET client_name = ?, address = COALESCE(?,address), place = ?, location_note = ?, emails = ?, phones = COALESCE(?,phones), list_id = ?,
                           updated_at = ?
          WHERE id = ?`
       )
         .bind(
           clientName,
-          place?.formattedAddress ?? "",
+          place?.formattedAddress || (body.address === undefined ? null : field(body.address, 240)),
           place ? JSON.stringify(place) : null,
           field(body.locationNote, 240),
           JSON.stringify(emailsOf(body.emails)),
+          body.phones === undefined ? null : JSON.stringify(contactPhones(body.phones)),
           listId,
           nowIso(),
           siteId

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -293,7 +293,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     const record=(i,siteId=sourceSites[i%4].payload.id)=>({kind:"record",payload:{id:`record:native-${i}`,templateId:"format-1",siteId,
       values:{notes:`Repaired valve ${i}`,pressure:42+i,outcome:"PASS"},
       sourceDocument:original(JSON.stringify({report_id:`native-${i}`,notes:`  Repaired valve ${i}  `,pressure:42+i,outcome:"PASS",extra:null})),
-      semantics:{schemaVersion:1,client:{...person,name:`Native Client ${i%4}`,emails:[`client${i%4}@example.com`]},employee:{...person,name:"Repair Worker"},user:person,date:{value:"2026-01-01",precision:"date"},serviceAddresses:[`${5100+i%4} Native Lane`]},
+      semantics:{schemaVersion:1,client:{...person,name:`Native Client ${i%4}`,emails:[`client${i%4}@example.com`],phones:[`(570) 555-010${i%4}`]},employee:{...person,name:"Repair Worker",emails:["crew@example.com"],phones:["5705550998"]},user:{...person,emails:["uploader@example.com"],phones:["5705550999"]},date:{value:"2026-01-01",precision:"date"},serviceAddresses:[`${5100+i%4} Native Lane`]},
       origin:{file:"repairs.csv",externalId:`native-${i}`},siteBinding:{status:siteId?"bound":"manual_sort",reason:siteId?"corroborated_identity":"insufficient_corroboration"},sortDecision:{status:"learned"}
     }});
     largeItems=[sourceTemplate,...sourceSites,...Array.from({length:60},(_,i)=>record(i))];pageSize=32;
@@ -303,6 +303,11 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     assert.equal(templates.length,1);const template=templates[0],doc=JSON.parse(template.doc);
     const sites=(await db.prepare("SELECT * FROM sites WHERE team_id=? AND client_name LIKE 'Native Client %' ORDER BY client_name").bind(teamA).all()).results;
     assert.equal(sites.length,4);
+    for (const [i, site] of sites.entries()) {
+      assert.equal(site.address, `${5100+i} Native Lane`);
+      assert.deepEqual(JSON.parse(site.emails), [`client${i}@example.com`]);
+      assert.deepEqual(JSON.parse(site.phones), [`(570) 555-010${i}`]);
+    }
     assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM dispatches WHERE template_id=?").bind(template.id).first()).n,4);
     for(const site of sites) assert.equal((await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports?site=${site.id}&template=${template.id}&limit=100`,{headers:{authorization:`Bearer aludel_${tokenA}`}}).then(r=>r.json())).length,15);
     const custom={tasks:[{...doc.tasks[0],name:"Our repair checklist",blocks:doc.tasks[0].blocks.map(b=>b.kind==="buttons"?{...b,options:[...b.options,"RECHECK"]}:b)}]};
@@ -348,6 +353,41 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     largeItems=null;pageSize=2;
   });
 
+  // Generate this fixture with Breakfast's same-named 500-visit Rust test.
+  // An opt-in bridge keeps the ordinary suite independent of a second checkout.
+  await t.test("500 visits from the Rust producer reach populated Aludel sites", { skip: !process.env.BFAST_SITE_CONTACT_TEST_EXPORT }, async () => {
+    const produced = JSON.parse(await readFile(process.env.BFAST_SITE_CONTACT_TEST_EXPORT, "utf8"));
+    const team = randomUUID(), token = "d".repeat(43), now = new Date().toISOString();
+    await db.prepare("INSERT INTO teams(id,name,created_at) VALUES(?,?,?)").bind(team, "Rust bridge", now).run();
+    await db.prepare("INSERT INTO tokens(id,team_id,name,created_by,created_at) VALUES(?,?,?,?,?)").bind(hash(token), team, "Bridge", "test", now).run();
+    largeItems = produced.items; pageSize = 128;
+    const form = new FormData(); form.append("files", new File(["producer fixture"], "visits.csv", { type: "text/csv" }));
+    const request = new Response(form);
+    const started = await call(team, "?timezone=America%2FNew_York&name=visits.csv", { method: "POST", headers: { "content-type": request.headers.get("content-type"), "x-import-id": randomUUID() }, body: await request.arrayBuffer() }, token);
+    assert.equal(started.status, 202, await started.clone().text());
+    const { id } = await started.json(); let job;
+    const deadline = Date.now() + 90_000;
+    do {
+      job = await (await call(team, `/${id}`, {}, token)).json();
+      assert.notEqual(job.state, "failed", JSON.stringify(job));
+      if (job.state === "complete") break;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } while (Date.now() < deadline);
+    assert.equal(job.state, "complete"); assert.equal(job.filed, 500); assert.equal(job.pending, 0); assert.equal(job.rejected, 0);
+    const sites = (await db.prepare("SELECT * FROM sites WHERE team_id=?").bind(team).all()).results;
+    assert.equal(sites.length, 4);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM templates WHERE team_id=?").bind(team).first()).n, 1);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM dispatches WHERE team_id=?").bind(team).first()).n, 4);
+    for (const expected of produced.sites) {
+      const site = sites.find(s => s.address === expected.address); assert.ok(site, expected.address);
+      assert.equal(site.client_name, expected.client.name);
+      assert.deepEqual(JSON.parse(site.emails), expected.client.emails);
+      assert.deepEqual(JSON.parse(site.phones), expected.client.phones);
+      const response = await mf.dispatchFetch(`http://localhost/api/teams/${team}/vault/reports?site=${site.id}&limit=1`, { headers: { authorization: `Bearer aludel_${token}` } });
+      const vault = await response.json(); assert.equal(vault.total, 125);
+    }
+    largeItems = null; pageSize = 2;
+  });
 });
 
 test("Breakfast runtime key names authenticate consistently and missing keys make no upstream request", async t => {
@@ -408,6 +448,7 @@ test("filing retains date-only precision and never substitutes the uploader for 
   const plan=await planGraph(resolvedFixture(),teamA,"contract","America/New_York");
   const template=plan.find(i=>i.kind==="template").payload, site=plan.find(i=>i.kind==="site").payload;
   const env={DB:{prepare(sql){return {bind(){return this;},async first(){
+    if(sql.includes("imported_contacts"))return null; // This date/ownership unit test does not model site storage.
     if(sql.includes("FROM sites"))return {id:site.id,name:site.clientName};
     if(sql.includes("FROM templates"))return {id:template.id,name:template.name,version:1,doc:JSON.stringify({tasks:template.tasks})};
     if(sql.includes("FROM dispatches"))return {id:randomUUID()};

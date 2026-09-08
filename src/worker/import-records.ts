@@ -4,6 +4,8 @@ import { readImportHistory, sha256, type ImportHistory } from "../shared/import-
 import type { Env } from "./index";
 import type { User } from "./auth";
 import type { ReportMeta } from "./vault";
+import { SiteContacts } from "../shared/site-contacts";
+import { enrichSite } from "./site-contacts";
 
 export interface ImportVault {
   byOrigin(key: string): string | null | Promise<string | null>;
@@ -17,6 +19,7 @@ const nowIso = () => new Date().toISOString();
 export async function fileImportRecords(env: Env, teamId: string, user: Pick<User, "id" | "name">,
   records: unknown[], vault: ImportVault) {
   const results: { index: number; id?: string; duplicate?: true; error?: string }[] = [];
+  const contacts = new Map<string, SiteContacts>();
   // a batch is mostly one form at a few sites: look each up once
   type SiteRow = { id: string; name: string };
   type TplRow = { id: string; name: string; version: number };
@@ -109,7 +112,16 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
       history
     );
     if (added.error) fail(added.error);
-    else results.push({ index, ...added });
+    else {
+      results.push({ index, ...added });
+      if (semantics) {
+        const profile = contacts.get(site.id) ?? new SiteContacts();
+        profile.add(semantics); contacts.set(site.id, profile);
+      }
+    }
   }
+  // Once per site per bounded batch, including duplicate reimports from older
+  // producers whose site rows omitted contacts. Never mine display labels again.
+  for (const [siteId, profile] of contacts) await enrichSite(env, teamId, siteId, profile.details());
   return { filed: results.filter((r) => r.id && !r.duplicate).length, results };
 }

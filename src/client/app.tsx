@@ -19,6 +19,7 @@ import {
 import { loadMaps, PLACE_FIELDS, toAludelPlace } from "./maps";
 import { VAULT_DELETE_CONFIRMATION, type VaultCatalog, type VaultDeleteResult, type VaultFilters, type VaultPage } from "../shared/vault";
 import { VaultDeleteDialog } from "./vault-delete";
+import { phoneKey, contactPhones, type SiteContactRecovery } from "../shared/site-contacts";
 import type { ImportHistory } from "../shared/import-history";
 import { ImportedHistory } from "./import-history";
 
@@ -83,6 +84,7 @@ interface SiteRow {
   place: AludelPlace | null;
   position: number;
   emails: string[];
+  phones: string[];
   listId: string | null;
   listName: string | null;
   dispatches: number;
@@ -125,12 +127,13 @@ interface Dispatch {
 interface SiteDoc {
   id: string;
   clientName: string;
-  /** Derived by the server from place.formattedAddress; empty when there is no place. */
+  /** Mined/plain-text service address, or the selected place's formatted address. */
   address: string;
   place: AludelPlace | null;
   /** Where the pin falls short: a gate code, a back unit, "one door north of the marker". */
   locationNote: string;
   emails: string[];
+  phones: string[];
   listId: string | null;
   dispatches: Dispatch[];
 }
@@ -573,7 +576,7 @@ export default function App() {
       />
     );
     if (section === "imports") return <Imports key={team.id} teamId={team.id} head={head} />;
-    if (section === "sites") return <Sites team={team} head={head} onOpen={setOpenSite} />;
+    if (section === "sites") return <Sites key={team.id} team={team} head={head} onOpen={setOpenSite} />;
     if (section === "map") return <MapScreen team={team} head={head} me={me} onOpen={setOpenSite} />;
     if (section === "field") return <FieldScreen key={team.id} team={team} head={head} onFill={setFilling} />;
     if (section === "vault") return <VaultScreen key={team.id} team={team} head={head} />;
@@ -1693,6 +1696,8 @@ function Sites({
   const [lists, setLists] = useState<ListRef[] | null>(null);
   const [sites, setSites] = useState<SiteRow[] | null>(null);
   const [error, setError] = useState("");
+  const [recovering, setRecovering] = useState(false), [recovery, setRecovery] = useState("");
+  const recoveringRef = useRef(false);
   // the order as of the last move, read when the drag ends
   const latest = useRef<SiteRow[]>([]);
 
@@ -1724,6 +1729,20 @@ function Sites({
       setError((e as Error).message);
     }
   };
+  const recover = async () => {
+    if (recoveringRef.current) return;
+    recoveringRef.current = true; setRecovering(true); setError("");
+    let after: string | null = null, updated = 0, checked = 0;
+    try {
+      do {
+        const result: SiteContactRecovery = await api(`/teams/${team.id}/sites/recover-contacts`, { method: "POST", body: JSON.stringify({ after }) });
+        updated += result.updatedSites; checked += result.processedSites; after = result.nextCursor;
+        setRecovery(`Updated ${plural(updated, "site")} from ${plural(checked, "site")} checked in Vault.`);
+      } while (after);
+      load();
+    } catch (e) { setError((e as Error).message); }
+    finally { recoveringRef.current = false; setRecovering(false); }
+  };
 
   const groups: { key: string; name: string; list: ListRef | null; rows: SiteRow[] }[] = [
     ...(lists ?? []).map((l) => ({ key: l.id, name: l.name, list: l, rows: (sites ?? []).filter((x) => x.listId === l.id) })),
@@ -1738,7 +1757,7 @@ function Sites({
         <span className="template-text">
           <span className="template-name">{x.clientName}</span>
           <span className="template-meta">
-            {[x.address, x.emails[0] && (x.emails.length > 1 ? `${x.emails[0]} +${x.emails.length - 1}` : x.emails[0])]
+            {[x.address, x.emails[0] && (x.emails.length > 1 ? `${x.emails[0]} +${x.emails.length - 1}` : x.emails[0]), x.phones?.[0]]
               .filter(Boolean)
               .join(" · ") || "No address yet"}
           </span>
@@ -1765,6 +1784,12 @@ function Sites({
         </section>
       ))}
 
+      {(team.role === "owner" || team.role === "admin") && <section className="card glass-frosted task">
+        <p className="template-meta">Recover missing client details from paperwork already saved in Vault.</p>
+        <button className="big-btn" disabled={recovering} onClick={recover}>{recovering ? "Updating sites…" : "Update sites from Vault"}</button>
+        {recovery && <p role="status" className="template-meta">{recovery}</p>}
+      </section>}
+
       {sites?.length === 0 && lists?.length === 0 && (
         <div className="empty">
           <p className="empty-title">No sites yet</p>
@@ -1789,13 +1814,16 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
   const [picker, setPicker] = useState(false);
 
   const [wizard, setWizard] = useState(false);
+  const [phoneSheet, setPhoneSheet] = useState(false);
   const [listSheet, setListSheet] = useState(false);
   const [placeSheet, setPlaceSheet] = useState(false);
   const fields = (x: SiteDoc) => ({
     clientName: x.clientName,
+    address: x.address,
     place: x.place,
     locationNote: x.locationNote,
     emails: x.emails,
+    phones: x.phones ?? [],
     listId: x.listId,
   });
   const dirty = useMemo(() => !!site && JSON.stringify(fields(site)) !== saved, [site, saved]);
@@ -1895,6 +1923,11 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
           <input className="text-input left" value={site.clientName} maxLength={80} placeholder="Smith residence"
             onChange={(e) => patch({ clientName: e.target.value })} />
         </label>
+        {!site.place && <label className="field">
+          <span className="section-label">Address</span>
+          <input className="text-input left" aria-label="Site address" value={site.address} maxLength={240} placeholder="Street address"
+            onChange={e => patch({ address: e.target.value })} />
+        </label>}
         <div className="field">
           <span className="section-label">Location</span>
           <button
@@ -1922,6 +1955,13 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
             <span className="row-btn-text">
               {site.emails.length ? site.emails.join(", ") : <span className="placeholder">Add emails</span>}
             </span>
+            <span className="chevron" aria-hidden="true"><ChevronRight /></span>
+          </button>
+        </div>
+        <div className="field">
+          <span className="section-label">Phones</span>
+          <button className="row-btn" onClick={() => setPhoneSheet(true)} aria-label="Edit phones">
+            <span className="row-btn-text">{site.phones?.length ? site.phones.join(", ") : <span className="placeholder">Add phones</span>}</span>
             <span className="chevron" aria-hidden="true"><ChevronRight /></span>
           </button>
         </div>
@@ -1986,6 +2026,7 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
           }}
         />
       )}
+      {phoneSheet && <PhonesSheet phones={site.phones ?? []} onDone={phones => { patch({ phones }); setPhoneSheet(false); }} />}
 
       {listSheet && (
         <ListSheet
@@ -2006,7 +2047,7 @@ function SiteEditor({ teamId, id, maps, onBack }: { teamId: string; id: string; 
           place={site.place}
           note={site.locationNote}
           onDone={(place, locationNote) => {
-            patch({ place, locationNote, address: place?.formattedAddress ?? "" });
+            patch({ place, locationNote, address: place?.formattedAddress ?? site.address });
             setPlaceSheet(false);
           }}
         />
@@ -2764,6 +2805,42 @@ function ListSheet({
       {alert && <Modal title={alert.title} message={alert.message} action={alert.action} onClose={() => setAlert(null)} />}
     </div>
   );
+}
+
+/** Edit client phones without reformatting historical paperwork. */
+function PhonesSheet({ phones, onDone }: { phones: string[]; onDone: (phones: string[]) => void }) {
+  const [list, setList] = useState(phones), [draft, setDraft] = useState(""), [error, setError] = useState("");
+  const checked = (values: string[]) => {
+    if (values.some(v => !phoneKey(v))) { setError("Enter a valid phone number, including its area or country code."); return null; }
+    const normalized = contactPhones(values);
+    if (normalized.length !== values.length) { setError("Each phone number must be different; a site can hold up to 10."); return null; }
+    setError(""); return normalized;
+  };
+  const add = () => {
+    if (!draft.trim()) return;
+    const next = checked([...list, draft]); if (next) { setList(next); setDraft(""); }
+  };
+  const done = () => { const next = checked([...list, ...(draft.trim() ? [draft] : [])]); if (next) onDone(next); };
+  return <div className="sheet"><div className="shell editor">
+    <header className="editor-top">
+      <button className="icon-btn" aria-label="Back" onClick={done}><ChevronLeft /></button>
+      <h1 className="site-title">Phones</h1><span className="version">{list.length} / 10</span>
+    </header>
+    <section className="card glass-frosted task">
+      {list.map((phone, i) => <div className="member-row dispatch-row" key={i}>
+        <input className="text-input left" type="tel" inputMode="tel" maxLength={80} aria-label={`Phone ${i + 1}`} value={phone}
+          onChange={e => setList(list.map((p, j) => j === i ? e.target.value : p))} />
+        <button className="icon-btn danger" aria-label={`Remove phone ${i + 1}`} onClick={() => setList(list.filter((_, j) => j !== i))}><X /></button>
+      </div>)}
+      <div className="add-email">
+        <input className="text-input left" type="tel" inputMode="tel" maxLength={80} aria-label="New phone" placeholder="Phone number" value={draft}
+          onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
+        <button className="big-btn plus" aria-label="Add phone" onClick={add}><Plus /></button>
+      </div>
+      {error && <p className="error" role="alert">{error}</p>}
+    </section>
+    <div className="dock"><button className="big-btn primary" onClick={done}>Done</button></div>
+  </div></div>;
 }
 
 /** Fullscreen editor for a site's contact emails. Mistakes surface as a modal, not a banner. */

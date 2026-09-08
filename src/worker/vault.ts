@@ -13,6 +13,9 @@ import type { VaultCatalog, VaultDeleteResult, VaultPage } from "../shared/vault
 import { vaultCursor, vaultWhere, type VaultBrowse } from "./vault-browse";
 import type { ImportHistory } from "../shared/import-history";
 import { fileImportRecords } from "./import-records";
+import { savedSiteContacts } from "./saved-site-contacts";
+import { enrichSite } from "./site-contacts";
+import type { SiteContactRecovery } from "../shared/site-contacts";
 
 export type ReportMeta = {
   semantics?: BreakfastSemantics | null;
@@ -192,6 +195,14 @@ export class Vault extends DurableObject<Env> {
   importRecords(teamId: string, user: { id: string; name: string }, recordsJson: string) {
     return this.duringImport(() => fileImportRecords(this.env, teamId, user, JSON.parse(recordsJson), this));
   }
+  recoverSiteContacts(teamId: string, after: string): Promise<SiteContactRecovery> {
+    return this.duringImport(async () => {
+      const page = savedSiteContacts(this.sql, after);
+      let updatedSites = 0;
+      for (const { siteId, details } of page.profiles) if (await enrichSite(this.env, teamId, siteId, details)) updatedSites++;
+      return { processedSites: page.profiles.length, updatedSites, nextCursor: page.nextCursor };
+    });
+  }
 
   /** Temporary beta reset. No await between the busy check and the full deletion. */
   deleteAll(): VaultDeleteResult | { error: string } {
@@ -219,8 +230,9 @@ export class Vault extends DurableObject<Env> {
     const seen = key ? this.byOrigin(key) : null;
     if (seen) {
       if (history) {
-        const previous = this.sql.exec<{ origin: string | null; history: string | null }>(
-          "SELECT r.origin,h.content AS history FROM reports r LEFT JOIN report_history h ON h.report_id=r.id WHERE r.id=?", seen).toArray()[0]!;
+        const previous = this.sql.exec<{ siteId: string; origin: string | null; history: string | null }>(
+          "SELECT r.site_id AS siteId,r.origin,h.content AS history FROM reports r LEFT JOIN report_history h ON h.report_id=r.id WHERE r.id=?", seen).toArray()[0]!;
+        if (previous.siteId !== meta.siteId) return { id: seen, error: "This source ID is already filed at a different site; review before filing" };
         const old: ImportHistory | null = previous.history ? JSON.parse(previous.history) : null;
         const before = old?.sourceDocument, incoming = history.sourceDocument;
         const sameSource = before && incoming && before.content === incoming.content && before.sha256 === incoming.sha256

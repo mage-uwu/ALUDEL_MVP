@@ -83,6 +83,8 @@ const TABLES = [
      location_note TEXT NOT NULL DEFAULT '',
      position INTEGER NOT NULL DEFAULT 0,
      emails TEXT NOT NULL DEFAULT '[]',
+     phones TEXT NOT NULL DEFAULT '[]',
+     imported_contacts TEXT,
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
    )`,
@@ -134,6 +136,12 @@ export function ensureSchema(db: D1Database): Promise<unknown> {
     await addColumn("ALTER TABLE templates ADD COLUMN team_id TEXT");
     // sites created before emails replaced phone
     await addColumn("ALTER TABLE sites ADD COLUMN emails TEXT NOT NULL DEFAULT '[]'");
+    const previousSiteColumns = (await db.prepare("PRAGMA table_info(sites)").all<{ name: string }>()).results.map(c => c.name);
+    await addColumn("ALTER TABLE sites ADD COLUMN phones TEXT NOT NULL DEFAULT '[]'");
+    if (!previousSiteColumns.includes("phones") && previousSiteColumns.includes("phone")) {
+      await db.prepare("UPDATE sites SET phones=json_array(phone) WHERE typeof(phone)='text' AND trim(phone)<>''").run();
+    }
+    await addColumn("ALTER TABLE sites ADD COLUMN imported_contacts TEXT");
     // sites created before locations were real places (address is now derived from place)
     await addColumn("ALTER TABLE sites ADD COLUMN place TEXT");
     await addColumn("ALTER TABLE sites ADD COLUMN location_note TEXT NOT NULL DEFAULT ''");
