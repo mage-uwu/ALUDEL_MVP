@@ -16,6 +16,7 @@ import { fileImportRecords } from "./import-records";
 import { savedSiteContacts } from "./saved-site-contacts";
 import { enrichSite } from "./site-contacts";
 import type { SiteContactRecovery } from "../shared/site-contacts";
+import type { SitesDeleteResult } from "../shared/sites";
 
 export type ReportMeta = {
   semantics?: BreakfastSemantics | null;
@@ -201,6 +202,23 @@ export class Vault extends DurableObject<Env> {
       let updatedSites = 0;
       for (const { siteId, details } of page.profiles) if (await enrichSite(this.env, teamId, siteId, details)) updatedSites++;
       return { processedSites: page.profiles.length, updatedSites, nextCursor: page.nextCursor };
+    });
+  }
+
+  /** Serialize the D1 reset with this team's import/recovery work. */
+  deleteAllSites(teamId: string): Promise<SitesDeleteResult | { error: string }> {
+    return this.ctx.blockConcurrencyWhile(async () => {
+      if (this.importOperations || this.imports.hasActiveWork()) {
+        return { error: "An import is still running. Wait for it to finish or pause, then delete all sites again." };
+      }
+      // D1 batches are transactional. Delete dispatches explicitly so the result
+      // counts do not depend on foreign-key cascade accounting. Vault is untouched.
+      const [dispatches, sites] = await this.env.DB.batch([
+        this.env.DB.prepare("DELETE FROM dispatches WHERE team_id=?").bind(teamId),
+        this.env.DB.prepare("DELETE FROM sites WHERE team_id=?").bind(teamId),
+        this.env.DB.prepare("UPDATE teams SET plan=NULL WHERE id=?").bind(teamId),
+      ]);
+      return { deletedSites: sites!.meta.changes, deletedDispatches: dispatches!.meta.changes };
     });
   }
 

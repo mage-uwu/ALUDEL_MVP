@@ -19,6 +19,8 @@ import {
 import { loadMaps, PLACE_FIELDS, toAludelPlace } from "./maps";
 import { VAULT_DELETE_CONFIRMATION, type VaultCatalog, type VaultDeleteResult, type VaultFilters, type VaultPage } from "../shared/vault";
 import { VaultDeleteDialog } from "./vault-delete";
+import { SitesDeleteDialog } from "./sites-delete";
+import { SITES_DELETE_CONFIRMATION, type SitesDeleteResult } from "../shared/sites";
 import { phoneKey, contactPhones, type SiteContactRecovery } from "../shared/site-contacts";
 import type { ImportHistory } from "../shared/import-history";
 import { ImportedHistory } from "./import-history";
@@ -1697,18 +1699,22 @@ function Sites({
   const [sites, setSites] = useState<SiteRow[] | null>(null);
   const [error, setError] = useState("");
   const [recovering, setRecovering] = useState(false), [recovery, setRecovery] = useState("");
+  const [deleting, setDeleting] = useState(false), [deleted, setDeleted] = useState("");
   const recoveringRef = useRef(false);
+  const loadVersion = useRef(0);
   // the order as of the last move, read when the drag ends
   const latest = useRef<SiteRow[]>([]);
 
   const load = () => {
+    const version = ++loadVersion.current;
     Promise.all([
       api<ListRef[]>(`/teams/${team.id}/lists`),
       api<SiteRow[]>(`/teams/${team.id}/sites`),
     ]).then(([ls, ss]) => {
+      if (version !== loadVersion.current) return;
       setLists(ls);
       setSites((latest.current = ss));
-    }, (e) => setError(e.message));
+    }, (e) => { if (version === loadVersion.current) setError(e.message); });
   };
   useEffect(load, [team.id]);
   const move = (listId: string | null) => (from: number, to: number) => setSites((latest.current = moveSite(latest.current, listId, from, to)));
@@ -1743,6 +1749,16 @@ function Sites({
     } catch (e) { setError((e as Error).message); }
     finally { recoveringRef.current = false; setRecovering(false); }
   };
+  const deleteAll = async () => {
+    const result = await api<SitesDeleteResult>(`/teams/${team.id}/sites`, {
+      method: "DELETE", body: JSON.stringify({ teamId: team.id, confirmation: SITES_DELETE_CONFIRMATION }),
+    });
+    ++loadVersion.current;
+    setSites((latest.current = [])); setLists(ls => ls?.map(l => ({ ...l, sites: 0 })) ?? null);
+    setError(""); setRecovery("");
+    setDeleted(`Deleted ${plural(result.deletedSites, "site")} and ${result.deletedDispatches} dispatch${result.deletedDispatches === 1 ? "" : "es"}.`);
+    load();
+  };
 
   const groups: { key: string; name: string; list: ListRef | null; rows: SiteRow[] }[] = [
     ...(lists ?? []).map((l) => ({ key: l.id, name: l.name, list: l, rows: (sites ?? []).filter((x) => x.listId === l.id) })),
@@ -1772,6 +1788,7 @@ function Sites({
     <div className="shell">
       {head}
       {error && <p className="error">{error}</p>}
+      {deleted && <p role="status" className="template-meta">{deleted}</p>}
 
       {groups.map((g) => (
         <section key={g.key} className="group">
@@ -1788,6 +1805,8 @@ function Sites({
         <p className="template-meta">Recover missing client details from paperwork already saved in Vault.</p>
         <button className="big-btn" disabled={recovering} onClick={recover}>{recovering ? "Updating sites…" : "Update sites from Vault"}</button>
         {recovery && <p role="status" className="template-meta">{recovery}</p>}
+        <p className="template-meta">Temporary beta cleanup: permanently remove all sites and their Field dispatches.</p>
+        <button className="big-btn danger" disabled={recovering || !sites?.length} onClick={() => setDeleting(true)}>Delete all sites…</button>
       </section>}
 
       {sites?.length === 0 && lists?.length === 0 && (
@@ -1800,6 +1819,7 @@ function Sites({
       <div className="dock">
         <button className="big-btn primary" onClick={create}>+ New site</button>
       </div>
+      {deleting && <SitesDeleteDialog teamName={team.name} onDelete={deleteAll} onClose={() => setDeleting(false)} />}
     </div>
   );
 }
