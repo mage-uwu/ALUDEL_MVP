@@ -78,7 +78,16 @@ It returns `{ reports, total, nextCursor }`. Both date endpoints are included; c
 to the selected filters. These browsing routes do not change the existing `/reports` or
 `/vault/query` API contracts.
 
-Every filed report is append-only, in the team's own SQLite-backed Durable Object
+**Temporary beta reset**: team owners/admins can choose **Delete all…** in Vault and type
+`DELETE ALL`. This permanently clears every report, original file, indexed fact, pending
+document and saved import job in that team, regardless of filters. Sites, templates and Field
+dispatches remain. The API is `DELETE /api/teams/:id/vault/reports` with JSON
+`{ "teamId": ":id", "confirmation": "DELETE ALL" }`; integration tokens and ordinary members
+cannot call it. It returns `{ deletedReports, deletedImports }`, or HTTP 409 while imports or
+manual filing are active. The reset is atomic and old import jobs cannot resume afterward.
+Remove this temporary UI and endpoint when beta resets are no longer needed.
+
+Filed reports are append-only during normal use, in the team's own SQLite-backed Durable Object
 (`Vault`, keyed by team id). A report is the record: site, template and version, who, when, the
 filled document or archived source and its SHA-256. Imported history is stored independently
 of the generated template. Vault displays original source records and offers a byte-preserving

@@ -64,6 +64,17 @@ export class BreakfastImports {
     };
   }
   list(): ImportJob[] { return this.sql.exec<JobRow>("SELECT * FROM breakfast_jobs ORDER BY created_at DESC LIMIT 30").toArray().map(r => this.view(r)); }
+  hasActiveWork(): boolean {
+    return this.sql.exec(`SELECT 1 FROM breakfast_jobs WHERE state IN (${ACTIVE}) LIMIT 1`).toArray().length > 0;
+  }
+  /** Temporary reset; the Vault calls this inside its deletion transaction. */
+  clear(): number {
+    const count = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM breakfast_jobs").toArray()[0]!.n;
+    this.sql.exec("DELETE FROM breakfast_items; DELETE FROM breakfast_catalog; DELETE FROM breakfast_transfers; DELETE FROM breakfast_jobs;");
+    // A scheduled alarm finds no jobs and removes itself. Do not asynchronously
+    // cancel it here: a new upload may already have installed its recovery alarm.
+    return count;
+  }
   get(id: string): ImportJob | null {
     const row = this.row(id); if (!row) return null;
     return {

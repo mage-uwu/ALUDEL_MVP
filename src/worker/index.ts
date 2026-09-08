@@ -29,8 +29,8 @@ import {
   type User,
 } from "./auth";
 import { ensureSchema } from "./schema";
-import { fileImportRecords } from "./import-records";
 import { readVaultBrowse } from "./vault-browse";
+import { VAULT_DELETE_CONFIRMATION } from "../shared/vault";
 
 
 export interface Env {
@@ -645,7 +645,7 @@ async function teamRoutes(
     const body = await readBody(req, 1024 * 1024);
     const records = Array.isArray(body?.records) ? body.records : [];
     if (!records.length || records.length > 200) return error(422, "records: 1–200 of them, within 1 MiB");
-    return json(await fileImportRecords(env, teamId, user, records, vaultFor(env, teamId)));
+    return json(await vaultFor(env, teamId).importRecords(teamId, { id: user.id, name: user.name }, JSON.stringify(records)));
   }
 
   // ——— Field: forms available to fill at a site ———
@@ -689,6 +689,16 @@ async function teamRoutes(
     try { query = readVaultBrowse(new URL(req.url).searchParams); }
     catch (e) { return error(422, (e as Error).message); }
     return json(await vaultFor(env, teamId).browse(query));
+  }
+  // Temporary beta reset: session-authenticated team owners/admins only.
+  if (rest === "/vault/reports" && req.method === "DELETE") {
+    if (!admin) return error(403, "Admins only");
+    const body = await readBody(req, 1024);
+    if (body?.confirmation !== VAULT_DELETE_CONFIRMATION || body?.teamId !== teamId) {
+      return error(422, "Confirm DELETE ALL for this team");
+    }
+    const result = await vaultFor(env, teamId).deleteAll();
+    return "error" in result ? error(409, result.error) : json(result);
   }
   if (rest === "/reports" && req.method === "POST") {
     const body = await readBody(req);

@@ -17,7 +17,8 @@ import {
   type Template,
 } from "../shared/model";
 import { loadMaps, PLACE_FIELDS, toAludelPlace } from "./maps";
-import type { VaultCatalog, VaultFilters, VaultPage } from "../shared/vault";
+import { VAULT_DELETE_CONFIRMATION, type VaultCatalog, type VaultDeleteResult, type VaultFilters, type VaultPage } from "../shared/vault";
+import { VaultDeleteDialog } from "./vault-delete";
 import type { ImportHistory } from "../shared/import-history";
 import { ImportedHistory } from "./import-history";
 
@@ -575,7 +576,7 @@ export default function App() {
     if (section === "sites") return <Sites team={team} head={head} onOpen={setOpenSite} />;
     if (section === "map") return <MapScreen team={team} head={head} me={me} onOpen={setOpenSite} />;
     if (section === "field") return <FieldScreen key={team.id} team={team} head={head} onFill={setFilling} />;
-    if (section === "vault") return <VaultScreen key={team.id} teamId={team.id} head={head} />;
+    if (section === "vault") return <VaultScreen key={team.id} team={team} head={head} />;
     return <Home team={team} head={head} onOpen={setOpenId} />;
   };
 
@@ -1417,7 +1418,8 @@ function FieldScreen({ team, head, onFill }: { team: TeamRef; head: React.ReactN
 
 /** The full history, separate from forms to fill. Keep filters and pagination
  * mounted while reading a report so Back returns to the same place. */
-function VaultScreen({ teamId, head }: { teamId: string; head: React.ReactNode }) {
+function VaultScreen({ team, head }: { team: TeamRef; head: React.ReactNode }) {
+  const teamId = team.id;
   const [filters, setFilters] = useState<VaultFilters>(() => ({ template: "", site: "", from: "", to: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" }));
   const [catalog, setCatalog] = useState<VaultCatalog | null>(null);
   const [page, setPage] = useState<VaultPage<ReportMeta> | null>(null);
@@ -1426,6 +1428,7 @@ function VaultScreen({ teamId, head }: { teamId: string; head: React.ReactNode }
   const [error, setError] = useState("");
   const [catalogError, setCatalogError] = useState("");
   const [openReport, setOpenReport] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false), [deleted, setDeleted] = useState("");
   const root = useRef<HTMLDivElement>(null), scroll = useRef(0);
   const base = `/teams/${teamId}/vault`;
   const invalidRange = Boolean(filters.from && filters.to && filters.from > filters.to);
@@ -1456,6 +1459,13 @@ function VaultScreen({ teamId, head }: { teamId: string; head: React.ReactNode }
   const clear = () => {
     setFilters(previous => ({ ...previous, template: "", site: "", from: "", to: "" })); setPages([null]); setPage(null);
   };
+  const deleteAll = async () => {
+    const result = await api<VaultDeleteResult>(`${base}/reports`, {
+      method: "DELETE", body: JSON.stringify({ teamId, confirmation: VAULT_DELETE_CONFIRMATION }),
+    });
+    clear(); setCatalog(null); setOpenReport(null); setRevision(v => v + 1);
+    setDeleted(`Deleted ${plural(result.deletedReports, "submission")} and ${plural(result.deletedImports, "import job")}.`);
+  };
   const filtered = Boolean(filters.template || filters.site || filters.from || filters.to);
   const siteNames = new Map<string, number>();
   for (const site of catalog?.sites ?? []) siteNames.set(site.name, (siteNames.get(site.name) ?? 0) + 1);
@@ -1473,6 +1483,11 @@ function VaultScreen({ teamId, head }: { teamId: string; head: React.ReactNode }
   return <div className="shell" ref={root}>
     {head}
     <p className="screen-description">Completed submissions and historical paperwork.</p>
+    {(team.role === "owner" || team.role === "admin") && <div className="vault-reset">
+      <span className="template-meta">Temporary beta tool</span>
+      <button className="vault-action danger" type="button" onClick={() => { setDeleted(""); setDeleting(true); }}>Delete all…</button>
+    </div>}
+    {deleted && <p role="status">{deleted}</p>}
     <form className="card glass-frosted vault-filters" aria-label="Filter completed paperwork" onSubmit={e => e.preventDefault()}>
       <label className="field vault-wide">
         <span className="section-label">Template</span>
@@ -1526,6 +1541,7 @@ function VaultScreen({ teamId, head }: { teamId: string; head: React.ReactNode }
       <span>Page {pages.length}</span>
       <button className="icon-btn" aria-label="Next page" disabled={!page?.nextCursor} onClick={() => { if (page?.nextCursor) { setPages(previous => [...previous, page.nextCursor]); setPage(null); } }}><ChevronRight /></button>
     </nav>}
+    {deleting && <VaultDeleteDialog teamName={team.name} onDelete={deleteAll} onClose={() => setDeleting(false)} />}
   </div>;
 }
 
