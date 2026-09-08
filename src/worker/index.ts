@@ -31,6 +31,7 @@ import {
 import { ensureSchema } from "./schema";
 import { readVaultBrowse } from "./vault-browse";
 import { VAULT_DELETE_CONFIRMATION } from "../shared/vault";
+import { SITES_DELETE_CONFIRMATION } from "../shared/sites";
 import { contactEmails, contactPhones, storedContacts } from "../shared/site-contacts";
 
 
@@ -323,6 +324,16 @@ async function teamRoutes(
   };
 
   if (rest === "/sites") {
+    // Temporary beta cleanup: session-authenticated owners/admins only.
+    if (req.method === "DELETE") {
+      if (!admin) return error(403, "Admins only");
+      const body = await readBody(req, 1024);
+      if (body?.confirmation !== SITES_DELETE_CONFIRMATION || body?.teamId !== teamId) {
+        return error(422, "Confirm DELETE ALL SITES for this team");
+      }
+      const result = await vaultFor(env, teamId).deleteAllSites(teamId);
+      return "error" in result ? error(409, result.error) : json(result);
+    }
     if (req.method === "GET") {
       const { results } = await env.DB.prepare(
         `SELECT s.id, s.client_name AS clientName, s.address, s.place, s.position, s.emails,

@@ -21,6 +21,15 @@ one dispatch per template, and deleting a list leaves its sites in place, unlist
 carries a drag handle: the order you drag sites into, on Sites or on a Map card, is the list's
 stored order, so it is the order the pins take and the route follows.
 
+**Temporary beta cleanup:** owners/admins can use **Sites → Delete all sites…** and
+type `DELETE ALL SITES` to permanently remove the team's sites, Field dispatches and
+saved route plan. Lists, templates, Vault reports and original files remain available.
+`DELETE /api/teams/:id/sites` requires the matching `teamId` and confirmation in its
+JSON body, and returns `{deletedSites, deletedDispatches}`. Integration tokens and
+ordinary members cannot use it. Active imports/recovery block deletion with `409`;
+the D1 deletion is transactional and serialized with the team's import work. This
+is separate from **Vault → Delete all…**, which removes historical paperwork.
+
 **Map**: every located site on one map, pinned and numbered by list, with a line through each
 list in its stored order. **Optimize** hands all located sites to the Google Maps Platform
 **Route Optimization API** (a fleet VRP solver — not the Routes API, not Fleet Engine) for N
