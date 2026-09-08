@@ -60,14 +60,39 @@ you were in comes back on reload. The model sees the last 20 turns. Nothing else
 team data, no tools. Set `XAI_API_KEY` as a secret; until then the pane says so. The Durable Object
 needs no setup; Cloudflare provisions it on deploy.
 
-**Field**: what a crew can file — every template dispatched to a site — and what was filed lately.
+**Field**: forms available to fill — every template dispatched to a site.
 Pick one, fill it (text, numbers with their unit, one key of a buttons block; photos come next),
 say when it was done, and file it. A report can only be filed against a dispatch, so it always
 names a real site and a real template version.
 
-**Vault**: every filed report, append-only, in the team's own SQLite-backed Durable Object
+**Vault**: a separate screen for completed submissions and historical paperwork. Filter by
+template, site, and an inclusive work-date range; browse the full history in pages of 50.
+Opening a report and going back preserves the filters and page. Filter choices come from saved
+reports, so deleting a live site or template does not hide its historical paperwork. Imported
+date-only records retain their written dates; timestamped work uses the viewer's calendar timezone.
+
+`GET /api/teams/:id/vault/catalog` returns saved template/site identities and report counts.
+`GET /api/teams/:id/vault/reports` accepts `template`, `site`, `from`, `to` (YYYY-MM-DD),
+`timezone` (IANA name; defaults to UTC), `limit` (1–100; defaults to 50), and `cursor`.
+It returns `{ reports, total, nextCursor }`. Both date endpoints are included; cursors belong
+to the selected filters. These browsing routes do not change the existing `/reports` or
+`/vault/query` API contracts.
+
+Every filed report is append-only, in the team's own SQLite-backed Durable Object
 (`Vault`, keyed by team id). A report is the record: site, template and version, who, when, the
-filled document and its SHA-256. Each filled block also becomes one typed **fact** row (number in
+filled document or archived source and its SHA-256. Imported history is stored independently
+of the generated template. Vault displays original source records and offers a byte-preserving
+download through `GET /api/teams/:id/reports/:reportId/source`. CSV headers, duplicate columns,
+empty cells, spacing and multiline notes survive; JSON retains its original record text, including
+number spelling, nested values and duplicate keys. Source text is rendered as text, never active HTML.
+
+An older producer that provides only values gets an explicitly labelled **Received data** view.
+Pre-existing reconstructions are identified as such. Reimport can attach a missing original when
+the recorded source fingerprint matches; a reused ID with different archived content requires review.
+Original content is never replaced by subsequent imports. Template/site/date filters operate on
+classification metadata and do not rewrite the source.
+
+Each block filled in Field also becomes one typed **fact** row (number in
 `num`, text and the pressed key in `text`, plus label, kind, unit and time), so a labelled block is
 a series across the whole stack and the stack is queryable in one shape:
 
@@ -86,9 +111,11 @@ team's object, so it cannot be injected and cannot cross teams; it is the tool a
 ### Importing old documents
 
 Open **Imports** in the section menu to send documents directly to Breakfast.
-Choose ZIP, CSV/TSV, JSON/JSONL, text or Markdown files (64 MiB including multipart
-framing) and the timezone used on the paperwork. PDFs, DOCX and scanned images
-need text extraction/OCR before upload. Processing and filing continue in the
+Choose PDFs, ZIP, CSV/TSV, JSON/JSONL, text or Markdown files (64 MiB including multipart
+framing) and the timezone used on the paperwork. Breakfast extracts embedded PDF text
+and OCRs scanned pages before the existing format/site pipeline. Each PDF stays one
+document with all its pages. DOCX and standalone images still need conversion first.
+Processing and filing continue in the
 team's existing Vault Durable Object after the page closes. Recent imports show
 progress, filed/duplicate/pending/rejected counts and documents awaiting review.
 
@@ -130,17 +157,18 @@ the team's worksite IDs. Records use the source `externalId` for deduplication.
 Existing templates/sites are never overwritten. Address-only sites retain their
 source address for the place picker. Identifier fields and constants stay text,
 choices keep their keys, and dates retain their resolved precision. Native records
-without a site or valid date, or with unsupported field values, remain complete
-in the team's manual review queue. Photo fields require further review before filing.
+without a site or valid date remain complete in the team's manual review queue.
+Historical field values do not have to fit the generated template.
 
 Each transfer response is bounded to 1 MiB and 256 items; total result size is
 not subject to the former 16 MiB graph cap. The queue holds only the current
 page and its referenced catalog mappings in Worker memory. Learned field IDs,
 types, choice options, client/site identities, resolved dates and source origins
-use the shared resolved contract. Individual staged records and templates retain
-their 120 KiB limit; an oversized native source row pauses transfer explicitly.
+use the shared resolved contract. Individual staged records and templates have a
+960 KiB limit; an oversized native source row pauses transfer explicitly.
 ALUDEL retains job checkpoints, imported field payloads, unresolved documents and
-filed reports; original upload files remain in Breakfast. TRANSMUTE is disabled
+filed reports, including original PDFs and text source records. Whole ZIP/multipart upload
+containers remain in Breakfast. TRANSMUTE is disabled
 for these imports, and normal jobs bypass GraphTM training and graph expansion.
 
 Deploy Breakfast's paginated import endpoint before this ALUDEL update. Existing
@@ -157,17 +185,36 @@ Authenticated team routes:
 | `POST /api/teams/:id/breakfast/jobs?timezone=...&name=...` | Multipart upload; requires UUID `X-Import-Id`; returns 202 with the local job. |
 | `GET /api/teams/:id/breakfast/jobs/:jobId` | Progress, counts and up to 50 record errors. |
 | `POST /api/teams/:id/breakfast/jobs/:jobId/resume` | Resume result transfer or filing from saved progress, without another Breakfast upload. |
+| `GET /api/teams/:id/reports/:reportId/source` | Download the original; PDFs support byte ranges and `?inline=1`. |
+| `GET /api/teams/:id/breakfast/jobs/:jobId/pending/:seq/source` | View/download the original while a document awaits manual filing. |
+
+Original PDFs use the tenant's existing SQLite Vault, with no new bucket or credentials.
+The producer sends 384 KiB binary chunks inside bounded `source_chunk` import items.
+The queue validates each chunk, stages bytes once outside report JSON, and verifies the
+entire file using a streaming SHA-256 before filing or serving it. Restarts/resumes reuse
+staged chunks; reused hashes with conflicting bytes fail. PDFs up to the existing
+256 MiB archive-member bound do not encounter the 960 KiB historical-row limit.
+Uncertain extraction remains visible in manual review with the preserved PDF available.
+
+Vault renders the original with a pinned PDF.js build, page navigation and zoom; source
+downloads preserve every byte. Rendering uses canvas only, with no PDF scripts or active
+form editing. PDF.js loads on demand; worker code, fonts, CMaps and decoders are served
+from Aludel's own static assets. `npm run build` copies those version-matched resources.
+PDF rendering is independent of generated Aludel template definitions.
 
 `npm test` runs the graph mapper and the actual Worker, D1, and SQLite Durable
 Objects in Miniflare against a local fake Breakfast server. It covers auth,
 cross-team access, multipart forwarding, progress recovery, duplicate imports,
-typed facts, uncertain uploads and persisted jobs. Transfer regressions cover
+original-source fidelity, uncertain uploads and persisted jobs. Transfer regressions cover
 results above 16 MiB, cursor recovery across restarts, changed snapshots, manifest
 count mismatches, oversized chunked pages, and recovery of prior size failures.
 The tests do not call production.
 
-A sidecar that reads old paperwork files it into the same vault through the same gate, so an
-imported report is queryable exactly like one filed from a phone. It authenticates with an
+A sidecar that reads old paperwork archives it in the same Vault, organized by template, site
+and work date. Imported history does not pass through form validation and does not manufacture
+template-derived fact rows. Numeric/field fact queries apply to Field submissions and existing
+legacy fact rows; report counts and template/site/date browsing include both kinds of history.
+The sidecar authenticates with an
 **integration token** (Members → Integrations; shown once, stored hashed, revocable) which acts as a
 *member* of one team and nothing else: no `/me`, no chats, no other team, no admin routes.
 
@@ -178,16 +225,20 @@ Content-Type: application/json
 ```
 
 ```jsonc
-{ "records": [                                   // 1–200 per call
+{ "records": [                                   // 1–200 per call; at most 1 MiB total
   { "siteId": "<uuid>",                          // an existing site of the team (resolve addresses before you get here)
     "templateId": "<uuid>",                      // an existing template; create it first via POST /templates + PUT if the TM minted a new proto-type
     "performedAt": "2024-01-17T14:00:00Z",       // when the work was done, ISO 8601, in the past
     "byName": "R. Ortiz",                        // optional: the technician named on the document; else the token's name
-    "values": {                                  // block id → value, keyed by the template's block ids (GET /templates/:id)
-      "<block id>": 38.5,                        // number blocks: a number (or a numeric string)
-      "<block id>": "FAIL",                      // buttons blocks: exactly one of the block's options
-      "<block id>": "Leak at the valve"          // text blocks: text, ≤ 4000 chars
-    },                                           // photo blocks, unknown ids and wrong kinds are dropped; nothing filled → error
+    "history": {
+      "schemaVersion": 1,
+      "sourceDocument": {
+        "schemaVersion": 1,
+        "mediaType": "application/json",        // also text/csv, text/tab-separated-values, text/plain, text/markdown
+        "content": "{\"notes\":\"  Leak at the valve  \"}",
+        "sha256": "<SHA-256 hex of the exact UTF-8 content>"
+      }                                          // CSV/TSV also include the original delimiter
+    },                                           // no template field mapping, coercion, trimming, or truncation
     "origin": {                                  // provenance — required
       "file": "2024-jan.pdf",                    // required
       "sha256": "<64 hex>",                      // recommended: with page, makes the record idempotent
@@ -201,7 +252,13 @@ Response: `{ "filed": n, "results": [{ "index", "id" } | { "index", "id", "dupli
 one entry per record in order. A record whose `externalId`, or `sha256` + `page`, was filed before
 comes back as a duplicate with the earlier id, so re-running a batch never files twice. A dispatch
 for the site and template is made on the spot if the app never dispatched it. Imported reports carry
-their `origin` and show as *imported* in Field.
+their `origin` and show as *imported* in Vault.
+
+Sources are checked against their SHA-256 before filing. An individual history record is bounded
+to 960 KiB; oversized records fail explicitly without dropping content. Legacy API clients may
+still send a `values` object in place of `history`; every supplied value is preserved in
+`history.receivedValues` and is not described as an original source. Report detail responses add
+`history`; imported reports have an empty `doc.tasks`, while Field reports retain their filled doc.
 
 **From the sidecar's graph export.** `tools/import-graph.mjs` reads the sidecar's graph
 (record → fact → block → template, plus site and employee; classifier nodes are ignored) and

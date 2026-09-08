@@ -1,13 +1,14 @@
 import { readBreakfastSemantics } from "../shared/breakfast";
-import { normalizeFilled, normalizeOrigin, normalizeTemplate, originKey, type Template, type Filled } from "../shared/model";
+import { normalizeOrigin, originKey, type Filled } from "../shared/model";
+import { readImportHistory, sha256, type ImportHistory } from "../shared/import-history";
 import type { Env } from "./index";
 import type { User } from "./auth";
 import type { ReportMeta } from "./vault";
 
 export interface ImportVault {
   byOrigin(key: string): string | null | Promise<string | null>;
-  addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null):
-    { id: string; duplicate?: true } | Promise<{ id: string; duplicate?: true }>;
+  addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null, history?: ImportHistory):
+    { id: string; duplicate?: true; error?: string } | Promise<{ id: string; duplicate?: true; error?: string }>;
 }
 const field = (v: unknown, max: number) => typeof v === "string" ? v.trim().slice(0, max) : "";
 const nowIso = () => new Date().toISOString();
@@ -18,7 +19,7 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
   const results: { index: number; id?: string; duplicate?: true; error?: string }[] = [];
   // a batch is mostly one form at a few sites: look each up once
   type SiteRow = { id: string; name: string };
-  type TplRow = { id: string; name: string; version: number; doc: string; template: Template };
+  type TplRow = { id: string; name: string; version: number };
   const sites = new Map<string, Promise<SiteRow | null>>();
   const dispatches=new Map<string,{id:string}>();
   const templates = new Map<string, Promise<TplRow | null>>();
@@ -30,10 +31,9 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
     templates
       .set(
         id,
-        env.DB.prepare("SELECT id, name, version, doc FROM templates WHERE id = ? AND team_id = ?")
+        env.DB.prepare("SELECT id, name, version FROM templates WHERE id = ? AND team_id = ?")
           .bind(id, teamId)
-          .first<Omit<TplRow, "template">>()
-          .then((t) => t && { ...t, template: normalizeTemplate({ ...JSON.parse(t.doc), name: t.name })! })
+          .first<TplRow>()
       )
       .get(id)!;
   for (const [index, raw] of records.entries()) {
@@ -47,12 +47,13 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
       fail("origin.file required");
       continue;
     }
-    const key = originKey(origin);
-    const seen = key ? await vault.byOrigin(key) : null;
-    if (seen) {
-      results.push({ index, id: seen, duplicate: true });
-      continue;
+    if (typeof (rec.origin as Record<string, unknown>).externalId === "string" && ((rec.origin as Record<string, unknown>).externalId as string).trim().length > 120) {
+      fail("Source report ID exceeds 120 characters"); continue;
     }
+    let history: ImportHistory;
+    try { history = await readImportHistory(rec.history ?? { schemaVersion: 1, receivedValues: rec.values }); }
+    catch (e) { fail((e as Error).message); continue; }
+    const key = originKey(origin);
     const site = await siteOf(field(rec.siteId, 36));
     if (!site) {
       fail("Unknown site");
@@ -63,18 +64,9 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
       fail("Unknown template");
       continue;
     }
-    const doc = normalizeFilled(tpl.template, rec);
-    if (!doc) {
-      fail("Nothing filled in");
-      continue;
-    }
-    if (rec.siteBinding !== undefined) {
-      const filled=new Map(doc.tasks.flatMap(t=>t.blocks).map(b=>[b.id,b.value]));
-      const entries=Object.entries((rec.values ?? {}) as Record<string,unknown>).filter(([,v])=>v !== null && v !== "");
-      if (entries.some(([id,value])=>!filled.has(id) || filled.get(id) !== (typeof value === "string" ? value.trim() : value))) {
-        fail("Some fields do not fit this template; review the complete saved document"); continue;
-      }
-    }
+    // Existing storage also holds forms filled in Field. Imported history has
+    // no reconstructed form or template-derived facts; its content stands alone.
+    const doc: Filled = { tasks: [] };
     const date = semantics ? semantics.date?.value ?? null : rec.performedAt;
     const performed = typeof date === "string" ? Date.parse(date) : NaN;
     // old paperwork may be older than the field's five-year window, but not older than the epoch
@@ -94,8 +86,7 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
       if (!dispatch) throw new Error("Dispatch creation failed");
       dispatches.set(dispatchKey,dispatch);
     }
-    const bytes = new TextEncoder().encode(JSON.stringify(doc));
-    const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const hash = await sha256(JSON.stringify(history));
     const added = await vault.addImported(
       {
         id: crypto.randomUUID(),
@@ -114,9 +105,11 @@ export async function fileImportRecords(env: Env, teamId: string, user: Pick<Use
         semantics,
       },
       doc,
-      key
+      key,
+      history
     );
-    results.push({ index, ...added });
+    if (added.error) fail(added.error);
+    else results.push({ index, ...added });
   }
   return { filed: results.filter((r) => r.id && !r.duplicate).length, results };
 }

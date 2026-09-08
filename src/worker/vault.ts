@@ -8,6 +8,10 @@ import { QUERY_LIMITS, type BlockKind, type Filled, type Origin, type VaultQuery
 import type { Env } from "./index";
 import type { BreakfastSemantics } from "../shared/breakfast";
 import { BreakfastImports } from "./breakfast-imports";
+import { PdfStore } from "./pdf-store";
+import type { VaultCatalog, VaultPage } from "../shared/vault";
+import { vaultCursor, vaultWhere, type VaultBrowse } from "./vault-browse";
+import type { ImportHistory } from "../shared/import-history";
 
 export type ReportMeta = {
   semantics?: BreakfastSemantics | null;
@@ -27,7 +31,7 @@ export type ReportMeta = {
   /** Null for a report filed in the field; the source document for an import. */
   origin: Origin | null;
 };
-export type Report = ReportMeta & { doc: Filled };
+export type Report = ReportMeta & { doc: Filled; history: ImportHistory | null };
 type Row = Omit<ReportMeta, "origin" | "semantics"> & { origin: string | null; semantics?: string | null };
 const withOrigin = (r: Row): ReportMeta => ({ ...r, semantics: r.semantics ? JSON.parse(r.semantics) : null, origin: r.origin ? (JSON.parse(r.origin) as Origin) : null });
 export type Fact = {
@@ -123,10 +127,12 @@ export function compile(q: VaultQuery): { sql: string; params: (string | number)
 export class Vault extends DurableObject<Env> {
   private sql: SqlStorage;
   private imports: BreakfastImports;
+  private pdfs: PdfStore;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.pdfs = new PdfStore(this.sql);
     this.imports = new BreakfastImports(ctx, env, this);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS reports (
@@ -139,6 +145,11 @@ export class Vault extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS reports_site ON reports(site_id, performed_at);
       CREATE INDEX IF NOT EXISTS reports_template ON reports(template_id, performed_at);
       CREATE INDEX IF NOT EXISTS reports_when ON reports(performed_at);
+      CREATE INDEX IF NOT EXISTS reports_browse ON reports(performed_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS reports_stack ON reports(site_id, template_id, performed_at DESC, id DESC);
+      CREATE TABLE IF NOT EXISTS report_history (
+        report_id TEXT PRIMARY KEY, content TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS facts (
         report_id TEXT NOT NULL, seq INTEGER NOT NULL, site_id TEXT NOT NULL, template_id TEXT NOT NULL,
         task_id TEXT NOT NULL, task_name TEXT NOT NULL, block_id TEXT NOT NULL, label TEXT NOT NULL,
@@ -172,10 +183,33 @@ export class Vault extends DurableObject<Env> {
   resolvePendingImport(id: string, seq: number, siteId: string, date?: string) { return this.imports.resolvePending(id,seq,siteId,date); }
 
   /** No await between the duplicate lookup and insert: atomic in one DO turn. */
-  addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null): { id: string; duplicate?: true } {
+  async addImported(meta: Omit<ReportMeta, "facts">, doc: Filled, key: string | null, history?: ImportHistory): Promise<{ id: string; duplicate?: true; error?: string }> {
+    if(history?.sourceDocument?.mediaType === "application/pdf") {
+      try {await this.pdfs.verify(history.sourceDocument);} catch(e) {return {id:meta.id,error:(e as Error).message};}
+    }
     const seen = key ? this.byOrigin(key) : null;
-    if (seen) return { id: seen, duplicate: true };
-    return { id: this.add(meta, doc, key).id };
+    if (seen) {
+      if (history) {
+        const previous = this.sql.exec<{ origin: string | null; history: string | null }>(
+          "SELECT r.origin,h.content AS history FROM reports r LEFT JOIN report_history h ON h.report_id=r.id WHERE r.id=?", seen).toArray()[0]!;
+        const old: ImportHistory | null = previous.history ? JSON.parse(previous.history) : null;
+        const before = old?.sourceDocument, incoming = history.sourceDocument;
+        const sameSource = before && incoming && before.content === incoming.content && before.sha256 === incoming.sha256
+          && before.mediaType === incoming.mediaType && before.delimiter === incoming.delimiter;
+        if (sameSource || old && JSON.stringify(old) === JSON.stringify(history)) return { id: seen, duplicate: true };
+        const sameFingerprint = meta.origin?.sha256 && previous.origin && JSON.parse(previous.origin).sha256 === meta.origin.sha256;
+        // A reimport can supply a source that an earlier producer omitted,
+        // but only against the same recorded input fingerprint. Existing
+        // original content is immutable, even when an external ID is reused.
+        if (!old?.sourceDocument && history.sourceDocument && sameFingerprint) {
+          this.sql.exec("INSERT INTO report_history(report_id,content) VALUES(?,?) ON CONFLICT(report_id) DO UPDATE SET content=excluded.content", seen, JSON.stringify(history));
+          return { id: seen, duplicate: true };
+        }
+        return { id: seen, error: "This source ID already exists with different or unverifiable historical content; review before filing" };
+      }
+      return { id: seen, duplicate: true };
+    }
+    return { id: this.add(meta, doc, key, history).id };
   }
 
   /** The report already filed from this document, if any. */
@@ -184,7 +218,7 @@ export class Vault extends DurableObject<Env> {
   }
 
   /** Append a report and its facts, all or nothing. */
-  add(meta: Omit<ReportMeta, "facts">, doc: Filled, originKey: string | null = null): ReportMeta {
+  add(meta: Omit<ReportMeta, "facts">, doc: Filled, originKey: string | null = null, history?: ImportHistory): ReportMeta {
     const facts = factsOf(doc);
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(
@@ -195,6 +229,7 @@ export class Vault extends DurableObject<Env> {
         meta.byUser, meta.byName, meta.performedAt, meta.submittedAt, meta.hash, facts.length, JSON.stringify(doc),
         meta.origin ? JSON.stringify(meta.origin) : null, originKey, meta.semantics ? JSON.stringify(meta.semantics) : null
       );
+      if (history) this.sql.exec("INSERT INTO report_history(report_id,content) VALUES(?,?)", meta.id, JSON.stringify(history));
       for (const f of facts)
         this.sql.exec(
           `INSERT INTO facts (report_id, seq, site_id, template_id, task_id, task_name, block_id, label, kind, unit, num, text, performed_at)
@@ -213,9 +248,41 @@ export class Vault extends DurableObject<Env> {
     return this.sql.exec<Row>(sql, ...params).toArray().map(withOrigin);
   }
 
-  get(id: string): Report | null {
-    const row = this.sql.exec<Row & { doc: string }>(`SELECT ${META}, r.doc FROM reports r WHERE r.id = ?`, id).toArray()[0];
-    return row ? { ...withOrigin(row), doc: JSON.parse(row.doc) as Filled } : null;
+  /** Options come from saved submissions, including deleted live objects. */
+  catalog(): VaultCatalog {
+    const options = (column: "template" | "site") => this.sql.exec<{ id: string; name: string; reports: number }>(`
+      SELECT r.${column}_id AS id, COUNT(*) AS reports,
+        (SELECT s.${column}_name FROM reports s WHERE s.${column}_id = r.${column}_id
+         ORDER BY s.submitted_at DESC, s.id DESC LIMIT 1) AS name
+      FROM reports r GROUP BY r.${column}_id ORDER BY name COLLATE NOCASE, id
+    `).toArray();
+    return { templates: options("template"), sites: options("site") };
+  }
+
+  browse(q: VaultBrowse): VaultPage<ReportMeta> {
+    const all = vaultWhere(q), page = vaultWhere(q, true);
+    const total = this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM reports r WHERE ${all.sql}`, ...all.params).toArray()[0]!.n;
+    const rows = this.sql.exec<Row>(`SELECT ${META} FROM reports r WHERE ${page.sql}
+      ORDER BY r.performed_at DESC, r.id DESC LIMIT ?`, ...page.params, q.limit + 1).toArray();
+    const reports = rows.slice(0, q.limit).map(withOrigin);
+    return { reports, total, nextCursor: rows.length > q.limit ? vaultCursor(q, reports.at(-1)!) : null };
+  }
+
+  /** JSON keeps arbitrary nested historical values outside the RPC type mapper. */
+  reportJson(id: string): string | null {
+    const row = this.sql.exec<Row & { doc: string; history: string | null }>(`SELECT ${META}, r.doc, h.content AS history
+      FROM reports r LEFT JOIN report_history h ON h.report_id = r.id WHERE r.id = ?`, id).toArray()[0];
+    return row ? JSON.stringify({ ...withOrigin(row), doc: JSON.parse(row.doc) as Filled, history: row.history ? JSON.parse(row.history) as ImportHistory : null } satisfies Report) : null;
+  }
+
+  async originalResponse(id: string, range: string | null, inline: boolean, pendingJob?: string): Promise<Response> {
+    const saved = pendingJob ? this.imports.pendingDocument(pendingJob,Number(id)) : JSON.parse(this.reportJson(id) ?? "null") as Report | null;
+    const source = (saved?.history as ImportHistory | undefined)?.sourceDocument;
+    if(!source)return new Response("Original source record is not available",{status:404});
+    if(source.mediaType === "application/pdf")return this.pdfs.response(source,range,inline);
+    const ext=({"text/csv":"csv","text/tab-separated-values":"tsv","application/json":"json","text/plain":"txt","text/markdown":"md"})[source.mediaType];
+    return new Response(source.content,{headers:{"content-type":`${source.mediaType}; charset=utf-8`,"cache-control":"no-store",
+      "content-disposition":`attachment; filename="source-${id}.${ext}"`,"x-content-type-options":"nosniff"}});
   }
 
   query(q: VaultQuery): { rows: ReportMeta[] } | { groups: { key: string; name: string; value: number | null; n: number }[] } {

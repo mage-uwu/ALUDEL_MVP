@@ -64,13 +64,15 @@ test("oversized chunked pages cancel their reader without accepting partial JSON
   assert.equal(cancelled,true);
 });
 
-test("a native row that grows past the filing limit pauses transfer instead of discarding its values",async()=>{
+test("historical values bypass form limits; oversized archive rows fail without discarding data",async()=>{
   const plan=await build({entryPoints:["src/worker/import-plan.ts"],bundle:true,write:false,format:"esm",platform:"neutral"});
   const {mapRecord}=await import(`data:text/javascript;base64,${Buffer.from(plan.outputFiles[0].text).toString("base64")}`);
   const values=Object.fromEntries(Array.from({length:32},(_,i)=>[`f${i}`,"x".repeat(3840)]));
   const source={id:"record:large",templateId:"format-1",siteId:"site-1",date:"2026-01-01",values,origin:{file:"large.csv",externalId:"large"},siteBinding:{status:"bound"}};
   const template={id:"template",blocks:Object.fromEntries(Object.keys(values).map((key,i)=>[key,{id:`11111111-1111-4111-8111-${String(i).padStart(12,"0")}`,kind:"text"}]))};
   assert.ok(Buffer.byteLength(JSON.stringify(source))<128*1024);
-  assert.throws(()=>mapRecord(source,template,"site","UTC"),/database record exceeds 120 KiB/);
+  assert.deepEqual(mapRecord(source,template,"site","UTC").payload.history.receivedValues,values);
+  const tooLarge={...source,values:{notes:"x".repeat(960*1024)}};
+  assert.throws(()=>mapRecord(tooLarge,template,"site","UTC"),/960 KiB/);
   assert.equal(Object.values(source.values).join("").length,32*3840);
 });

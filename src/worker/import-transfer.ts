@@ -1,4 +1,5 @@
 import type { ImportItem } from "./graph-import";
+import { readSourceChunk } from "../shared/import-history";
 import { mapTemplate, mapSite, mapRecord, type TemplateMapping, type SourceTemplate, type SourceSite } from "./import-plan";
 
 export type TransferRow = {
@@ -23,7 +24,7 @@ export function readTransferPage(raw: unknown, jobId: string, previous?: Transfe
     || (previous && (page.snapshot !== previous.snapshot || page.totalItems !== previous.total_items || page.totalRecords !== previous.total_records))
     || (end < page.totalItems ? !page.items.length || page.nextCursor !== `${page.snapshot}:${end}` : page.nextCursor !== null)) throw new Error("Breakfast import pages are out of sequence or changed");
   for (const item of page.items) {
-    if (!object(item) || !object(item.payload) || !["template", "site", "record", "rejected"].includes(item.kind)) throw new Error("Invalid Breakfast import item");
+    if (!object(item) || !object(item.payload) || !["template", "site", "record", "rejected", "source_chunk"].includes(item.kind)) throw new Error("Invalid Breakfast import item");
     const p = item.payload;
     if (item.kind === "rejected") {
       if (!id(p.record) || typeof p.error !== "string" || p.error.length > 1000) throw new Error("Invalid rejected record");
@@ -57,7 +58,10 @@ export async function planTransferPage(page: TransferPage, teamId: string, jobId
   };
   for (const item of page.items) {
     const p = item.payload;
-    if (item.kind === "template") {
+    if (item.kind === "source_chunk") {
+      await readSourceChunk(p);
+      items.push({kind:"source_chunk",payload:p});
+    } else if (item.kind === "template") {
       let mapped = await mapTemplate(p as unknown as SourceTemplate, teamId, jobId);
       if (reconcile) mapped = await reconcile.template(p as unknown as SourceTemplate,mapped);
       catalog.push({ kind: "template", source: p.id as string, mapping: mapped.mapping });

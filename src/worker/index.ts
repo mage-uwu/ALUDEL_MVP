@@ -30,6 +30,7 @@ import {
 } from "./auth";
 import { ensureSchema } from "./schema";
 import { fileImportRecords } from "./import-records";
+import { readVaultBrowse } from "./vault-browse";
 
 
 export interface Env {
@@ -81,10 +82,10 @@ const INVITE_TTL_S = 7 * 24 * 3600;
 const UUID = "[0-9a-fA-F-]{36}";
 const nowIso = () => new Date().toISOString();
 
-async function readBody(req: Request): Promise<Record<string, unknown> | null> {
-  if (Number(req.headers.get("content-length") ?? 0) > LIMITS.body) return null;
+async function readBody(req: Request, max: number = LIMITS.body): Promise<Record<string, unknown> | null> {
+  if (Number(req.headers.get("content-length") ?? 0) > max) return null;
   const text = await req.text();
-  if (text.length > LIMITS.body) return null;
+  if (new TextEncoder().encode(text).byteLength > max) return null;
   try {
     const v = JSON.parse(text);
     return typeof v === "object" && v !== null && !Array.isArray(v) ? v : null;
@@ -170,6 +171,8 @@ async function teamRoutes(
     }
     return error(405, "Method not allowed");
   }
+  const pendingSource=rest.match(new RegExp(`^/breakfast/jobs/(${UUID})/pending/(\\d+)/source$`));
+  if(pendingSource && req.method === "GET")return vaultFor(env,teamId).originalResponse(pendingSource[2]!,req.headers.get("range"),new URL(req.url).searchParams.get("inline")==="1",pendingSource[1]!);
   const pendingImport = rest.match(new RegExp(`^/breakfast/jobs/(${UUID})/pending(?:/(\\d+))?$`));
   if (pendingImport) {
     const vault=vaultFor(env,teamId), id=pendingImport[1]!, seq=pendingImport[2] === undefined ? null : Number(pendingImport[2]);
@@ -639,13 +642,13 @@ async function teamRoutes(
 
   // ——— import: old documents, already read into records, filed like field work ———
   if (rest === "/import" && req.method === "POST") {
-    const body = await readBody(req);
-    const records = Array.isArray(body?.records) ? body.records.slice(0, 200) : [];
-    if (!records.length) return error(422, "records: 1–200 of them");
+    const body = await readBody(req, 1024 * 1024);
+    const records = Array.isArray(body?.records) ? body.records : [];
+    if (!records.length || records.length > 200) return error(422, "records: 1–200 of them, within 1 MiB");
     return json(await fileImportRecords(env, teamId, user, records, vaultFor(env, teamId)));
   }
 
-  // ——— the field and the vault: what may be filed, filing it, and asking the stack ———
+  // ——— Field: forms available to fill at a site ———
   if (rest === "/dispatches" && req.method === "GET") {
     const { results } = await env.DB.prepare(
       `SELECT d.id, d.site_id AS siteId, s.client_name AS siteName, d.template_id AS templateId,
@@ -665,6 +668,27 @@ async function teamRoutes(
     if (p.get("site")?.match(UUID)) filter.site = p.get("site")!;
     if (p.get("template")?.match(UUID)) filter.template = p.get("template")!;
     return json(await vaultFor(env, teamId).list(filter));
+  }
+  // Vault's filters are based on completed paperwork, even if its live site or
+  // template was deleted. Current object names/addresses help identify options.
+  if (rest === "/vault/catalog" && req.method === "GET") {
+    const [catalog, sites, templates] = await Promise.all([
+      vaultFor(env, teamId).catalog(),
+      env.DB.prepare("SELECT id,client_name AS name,address,location_note FROM sites WHERE team_id = ?").bind(teamId).all<{ id: string; name: string; address: string; location_note: string }>(),
+      env.DB.prepare("SELECT id,name FROM templates WHERE team_id = ?").bind(teamId).all<{ id: string; name: string }>(),
+    ]);
+    const currentSites = new Map(sites.results.map(s => [s.id, s])), currentTemplates = new Map(templates.results.map(t => [t.id, t.name]));
+    const byName = (a: { name: string; id: string }, b: { name: string; id: string }) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+    return json({
+      templates: catalog.templates.map(t => ({ ...t, name: currentTemplates.get(t.id) ?? t.name })).sort(byName),
+      sites: catalog.sites.map(s => ({ ...s, name: currentSites.get(s.id)?.name ?? s.name, address: currentSites.get(s.id)?.address || currentSites.get(s.id)?.location_note || "" })).sort(byName),
+    });
+  }
+  if (rest === "/vault/reports" && req.method === "GET") {
+    let query;
+    try { query = readVaultBrowse(new URL(req.url).searchParams); }
+    catch (e) { return error(422, (e as Error).message); }
+    return json(await vaultFor(env, teamId).browse(query));
   }
   if (rest === "/reports" && req.method === "POST") {
     const body = await readBody(req);
@@ -709,8 +733,12 @@ async function teamRoutes(
   }
   const report = rest.match(new RegExp(`^/reports/(${UUID})$`));
   if (report && req.method === "GET") {
-    const found = await vaultFor(env, teamId).get(report[1]!);
-    return found ? json(found) : error(404, "Not found");
+    const found = await vaultFor(env, teamId).reportJson(report[1]!);
+    return found ? json(JSON.parse(found)) : error(404, "Not found");
+  }
+  const sourceRecord = rest.match(new RegExp(`^/reports/(${UUID})/source$`));
+  if (sourceRecord && req.method === "GET") {
+    return vaultFor(env,teamId).originalResponse(sourceRecord[1]!,req.headers.get("range"),new URL(req.url).searchParams.get("inline")==="1");
   }
   if (rest === "/vault/query" && req.method === "POST") {
     const q = normalizeQuery(await readBody(req));

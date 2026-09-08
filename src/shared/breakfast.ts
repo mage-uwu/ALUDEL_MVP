@@ -18,7 +18,7 @@ export interface ImportJob {
   errors?: { record: string; error: string }[];
 }
 export const IMPORT_MAX_BYTES = 64 * 1024 * 1024;
-export const IMPORT_EXTENSIONS = /\.(zip|csv|tsv|json|jsonl|ndjson|txt|text|md|markdown)$/i;
+export const IMPORT_EXTENSIONS = /\.(zip|pdf|csv|tsv|json|jsonl|ndjson|txt|text|md|markdown)$/i;
 
 export interface BreakfastPerson {
   name: string | null;

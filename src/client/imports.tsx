@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { IMPORT_EXTENSIONS, IMPORT_MAX_BYTES, type ImportJob } from "../shared/breakfast";
+import type { ImportHistory } from "../shared/import-history";
+import { ImportedHistory } from "./import-history";
 
 /** Requests stay on ALUDEL's origin; no Breakfast key or review token enters the browser. */
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -44,7 +46,7 @@ export function Imports({ teamId, head }: { teamId: string; head: React.ReactNod
 
   async function upload() {
     if (busy || !files.length) return;
-    if (files.some(f => !IMPORT_EXTENSIONS.test(f.name))) { setError("Choose ZIP, CSV, TSV, JSON, JSONL, text or Markdown files. Extract PDFs and scanned documents first."); return; }
+    if (files.some(f => !IMPORT_EXTENSIONS.test(f.name))) { setError("Choose ZIP, PDF, CSV, TSV, JSON, JSONL, text or Markdown files."); return; }
     // Reserve room for multipart headers as well as file bytes.
     if (files.reduce((n, f) => n + f.size + 1024, 1024) > IMPORT_MAX_BYTES) { setError("These files exceed the 64 MiB upload limit. Split them into smaller uploads."); return; }
     setError(""); setBusy(true);
@@ -78,9 +80,9 @@ export function Imports({ teamId, head }: { teamId: string; head: React.ReactNod
       <p className="muted">Turn old paperwork into templates, sites and filed reports for this team.</p>
       {configured === false ? <p role="status">Document import isn’t connected yet. Ask an administrator to finish setup.</p> : <>
         <label className="import-label">Documents
-          <input ref={input} type="file" multiple accept=".zip,.csv,.tsv,.json,.jsonl,.ndjson,.txt,.text,.md,.markdown" disabled={busy || configured === null} onChange={e => setFiles(Array.from(e.target.files ?? []))} />
+          <input ref={input} type="file" multiple accept=".zip,.pdf,.csv,.tsv,.json,.jsonl,.ndjson,.txt,.text,.md,.markdown" disabled={busy || configured === null} onChange={e => setFiles(Array.from(e.target.files ?? []))} />
         </label>
-        <p className="template-meta">ZIP, CSV, TSV, JSON, text or Markdown · up to 64 MiB. Extract PDFs and scans first.</p>
+        <p className="template-meta">PDFs, ZIP, CSV, TSV, JSON, text or Markdown · up to 64 MiB. Scanned PDFs are read automatically; originals stay in your Vault.</p>
         <label className="import-label">Paperwork timezone
           <input value={timezone} onChange={e => setTimezone(e.target.value)} disabled={busy} placeholder="America/New_York" />
         </label>
@@ -114,7 +116,7 @@ export function Imports({ teamId, head }: { teamId: string; head: React.ReactNod
 
 
 type PendingRow = {seq:number;record:string;reason:string};
-type PendingDocument = {source?:{values:Record<string,unknown>};fieldLabels?:Record<string,string>;siteId:string|null;reason:string;origin?:{externalId?:string};semantics?:{client:{name:string|null};date:{value:string}|null};fields?:Array<{label:string;value:unknown}>;values?:Record<string,unknown>};
+type PendingDocument = {history?:ImportHistory;source?:{values:Record<string,unknown>};fieldLabels?:Record<string,string>;siteId:string|null;reason:string;origin?:{externalId?:string};semantics?:{client:{name:string|null};date:{value:string}|null};fields?:Array<{label:string;value:unknown}>;values?:Record<string,unknown>};
 function PendingDocuments({base,jobId,teamId,close}:{base:string;jobId:string;teamId:string;close:()=>void}) {
   const [rows,setRows]=useState<PendingRow[]>([]),[sites,setSites]=useState<Array<{id:string;clientName:string;address:string}>>([]);
   const [selected,setSelected]=useState<{seq:number;doc:PendingDocument}|null>(null),[site,setSite]=useState(""),[date,setDate]=useState("");
@@ -134,7 +136,7 @@ function PendingDocuments({base,jobId,teamId,close}:{base:string;jobId:string;te
     {selected && <div>
       <h3>{selected.doc.semantics?.client.name || selected.doc.origin?.externalId || "Document"}</h3>
       <p>{selected.doc.reason}</p>
-      <dl>{(selected.doc.fields ?? Object.entries(selected.doc.source?.values ?? selected.doc.values ?? {}).map(([label,value])=>({label:selected.doc.fieldLabels?.[label] || label,value}))).map((f,i)=><div key={i}><dt>{f.label}</dt><dd>{typeof f.value === "object" ? JSON.stringify(f.value) : String(f.value ?? "")}</dd></div>)}</dl>
+      {selected.doc.history ? <ImportedHistory history={selected.doc.history} download={`${path}/${selected.seq}/source`} /> : <dl>{(selected.doc.fields ?? Object.entries(selected.doc.source?.values ?? selected.doc.values ?? {}).map(([label,value])=>({label:selected.doc.fieldLabels?.[label] || label,value}))).map((f,i)=><div key={i}><dt>{f.label}</dt><dd>{typeof f.value === "object" ? JSON.stringify(f.value) : String(f.value ?? "")}</dd></div>)}</dl>}
       <label className="import-label">Site<select value={site} onChange={e=>setSite(e.target.value)}><option value="">Choose a site</option>{sites.map(s=><option key={s.id} value={s.id}>{s.clientName} · {s.address}</option>)}</select></label>
       <p className="template-meta">Document date: {selected.doc.semantics?.date?.value || "Unknown"}</p>
       <label className="import-label">Set or correct the date<input type="date" value={date} onChange={e=>setDate(e.target.value)} /></label>
