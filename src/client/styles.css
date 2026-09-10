@@ -696,48 +696,67 @@ body {
 .task {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.7);
-  border-color: rgba(255, 255, 255, 0.82);
-  box-shadow: inset 0 1px 0 #fff, 0 10px 26px -20px rgba(28, 32, 38, 0.4);
+  gap: 0;
+  padding: 8px 16px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.66);
+  backdrop-filter: blur(24px) saturate(1.15);
+  -webkit-backdrop-filter: blur(24px) saturate(1.15);
+  box-shadow: inset 0 1px 0 #fff, 0 18px 38px -30px rgba(28, 32, 38, 0.42);
 }
-.task.glass-frosted::after { opacity: 0.18; }
-.task-head, .block-head { display: flex; align-items: flex-start; gap: 8px; }
-.task-title, .block-title { display: flex; flex: 1; min-width: 0; flex-direction: column; }
-.task-kicker, .block-kind {
-  color: var(--muted);
-  font-size: 10px;
+.task-head, .block-head { display: flex; align-items: center; gap: 9px; }
+.task-head {
+  min-height: 56px;
+  border-bottom: 1px solid rgba(215, 219, 224, 0.82);
+}
+.task-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 9px;
+  background: #e7eaee;
+  color: #555b64;
+  font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.05em;
+}
+.block-kind {
+  flex: none;
+  width: 48px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
   line-height: 1;
   text-transform: uppercase;
 }
-.task-kicker { padding: 3px 4px 0; }
 .task-name {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 19px;
+  font-size: 18px;
   font-weight: 800;
   flex: 1;
   min-width: 0;
   outline: none;
-  padding: 4px 4px 2px;
+  padding: 6px 0;
 }
 
 /* blocks */
 .block {
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  padding: 11px;
-  border: 1px solid rgba(210, 214, 220, 0.86);
-  border-radius: 14px;
-  background: rgba(248, 249, 251, 0.76);
+  gap: 8px;
+  padding: 12px 0 14px;
+  border: 0;
+  border-bottom: 1px solid rgba(215, 219, 224, 0.82);
+  border-radius: 0;
+  background: transparent;
 }
-.block-kind { padding: 2px 4px 0; }
 .block-label {
   border: 0;
   background: transparent;
@@ -747,28 +766,28 @@ body {
   flex: 1;
   min-width: 0;
   outline: none;
-  padding: 4px 4px 1px;
+  padding: 4px 0;
 }
 /* etched glass drop area */
 .photo-drop {
-  min-height: 68px;
-  border: 1.5px dashed #c9cdd3;
-  border-radius: 12px;
-  background: linear-gradient(180deg, rgba(244, 246, 248, 0.9), rgba(236, 239, 242, 0.7));
-  box-shadow: inset 0 2px 6px rgba(28, 32, 38, 0.05);
+  min-height: 48px;
+  margin-left: 57px;
+  border: 1px dashed #c6cbd2;
+  border-radius: 10px;
+  background: rgba(245, 247, 249, 0.62);
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 12px 14px;
+  gap: 9px;
+  padding: 8px 11px;
   color: var(--muted);
   font-size: 13px;
 }
 .photo-drop > span:last-child { display: flex; flex-direction: column; gap: 2px; }
-.photo-drop strong { color: var(--ink); font-size: 14px; }
-.photo-drop small { font-size: 12px; }
+.photo-drop strong { color: var(--ink); font-size: 13px; }
+.photo-drop small { font-size: 11px; }
 .lens {
-  width: 28px; height: 28px;
-  border: 2px solid #9aa0a8;
+  width: 24px; height: 24px;
+  border: 1.5px solid #9aa0a8;
   border-radius: 50%;
   position: relative;
   flex: none;
@@ -776,8 +795,8 @@ body {
 .lens::after {
   content: "";
   position: absolute;
-  inset: 6px;
-  border: 2px solid #9aa0a8;
+  inset: 5px;
+  border: 1.5px solid #9aa0a8;
   border-radius: 50%;
 }
 /* recessed ceramic wells */
@@ -793,6 +812,7 @@ body {
 .faux-input.tall { min-height: 72px; }
 .faux-input.grow { flex: 1; }
 .number-row { display: flex; gap: 8px; align-items: stretch; }
+.block > .faux-input, .block > .number-row { margin-left: 57px; }
 .unit {
   width: 88px;
   border: 1px solid var(--line);
@@ -807,18 +827,15 @@ body {
 
 /* buttons blocks: gloss ceramic keys, each label edited on its face. Keys
    wrap at 130px so two sit side by side on a phone and a lone key spans. */
-.key-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.key-grid { display: flex; flex-wrap: wrap; gap: 7px; margin-left: 57px; }
 .button-key {
   flex: 1 1 130px;
   min-width: 0;
-  min-height: 46px;
+  min-height: 40px;
   border: 1px solid var(--ceramic-border);
-  border-radius: 12px;
-  background: var(--ceramic);
-  box-shadow:
-    inset 0 1px 0 #fff,
-    inset 0 -2px 5px rgba(28, 32, 38, 0.04),
-    0 5px 12px -9px rgba(28, 32, 38, 0.3);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px 0 #fff, 0 3px 8px -7px rgba(28, 32, 38, 0.35);
   font: inherit;
   font-size: 14px;
   font-weight: 800;
@@ -845,44 +862,51 @@ body {
 .add-row button:active { background: rgba(255, 255, 255, 0.6); }
 .add-row button:disabled { opacity: 0.35; cursor: default; }
 /* the key-count controls belong to one block, so they stay compact and right-aligned */
-.add-row.key-ctl { justify-content: flex-end; }
+.add-row.key-ctl { justify-content: flex-end; margin-left: 57px; }
 .add-row.key-ctl button {
-  flex: 0 1 104px;
-  min-height: 34px;
-  border-style: solid;
-  font-size: 12px;
+  flex: 0 1 auto;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 11px;
 }
 
 .add-field-trigger, .add-task {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 7px;
-  width: 100%;
-  min-height: 44px;
-  border: 1px dashed #bcc2ca;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.34);
+  min-height: 46px;
+  border: 0;
+  background: transparent;
   color: #5f666f;
   font: inherit;
   font-size: 14px;
-  font-weight: 750;
+  font-weight: 700;
   cursor: pointer;
 }
 .add-field-trigger svg, .add-task svg { width: 17px; height: 17px; }
-.add-field-trigger:active, .add-task:active { background: rgba(255, 255, 255, 0.72); }
-.add-task { min-height: 48px; border-style: solid; background: rgba(255, 255, 255, 0.68); }
-.field-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.add-field-trigger { width: auto; padding: 0 4px; }
+.add-field-trigger:active, .add-task:active { color: var(--ink); }
+.add-task {
+  align-self: flex-start;
+  width: auto;
+  min-height: 40px;
+  margin-left: 12px;
+  padding: 0 8px;
+}
+.field-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 10px 0 4px; }
 .field-picker button {
   display: flex;
   min-width: 0;
-  min-height: 58px;
+  min-height: 52px;
   flex-direction: column;
   justify-content: center;
   gap: 2px;
   padding: 9px 11px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
   font: inherit;
@@ -895,7 +919,7 @@ body {
 
 /* drag-to-reorder */
 .task-list { display: flex; flex-direction: column; gap: 12px; }
-.block-list { display: flex; flex-direction: column; gap: 9px; }
+.block-list { display: flex; flex-direction: column; gap: 0; }
 .block-list:empty { display: none; }
 .handle {
   cursor: grab;
@@ -920,7 +944,8 @@ body {
 
 /* icon controls: a quiet circular hit area; the glyph is an SVG, never a typed character */
 .row-controls { display: flex; gap: 0; flex: none; }
-.task .row-controls .icon-btn { width: 34px; height: 34px; }
+.task .row-controls .icon-btn { width: 36px; height: 36px; }
+.block .row-controls .icon-btn { width: 36px; height: 36px; }
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -945,11 +970,24 @@ body {
   left: 0; right: 0;
   bottom: 0;
   padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
-  background: linear-gradient(rgba(232, 235, 240, 0), rgba(232, 235, 240, 0.92) 40%);
+  background: linear-gradient(rgba(232, 235, 240, 0), rgba(232, 235, 240, 0.76) 55%);
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
+  pointer-events: none;
 }
-.dock .big-btn { width: min(452px, 100%); }
+.dock .big-btn {
+  width: auto;
+  min-width: 116px;
+  min-height: 46px;
+  padding: 0 18px;
+  border-radius: 14px;
+  pointer-events: auto;
+}
+.dock .big-btn span {
+  margin-left: 6px;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 11px;
+}
 @media (min-width: 1024px) {
   .dock {
     position: sticky;
