@@ -986,6 +986,7 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
         {tpl.tasks.map((task, i) => (
           <TaskCard
             key={task.id}
+            index={i + 1}
             task={task}
             dragging={taskSort.dragging === i}
             patch={(fn) => patchTask(task.id, fn)}
@@ -994,7 +995,7 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
           />
         ))}
       </div>
-      <button className="big-btn" onClick={addTask}>+ Add task</button>
+      <button className="add-task" onClick={addTask}><Plus /> Add task</button>
       {dirty && (
         <div className="dock">
           <button className="big-btn primary" onClick={save}>Save · v{tpl.version + 1}</button>
@@ -1005,23 +1006,26 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
 }
 
 function TaskCard({
+  index,
   task,
   dragging,
   patch,
   onHandleDown,
   onRemove,
 }: {
+  index: number;
   task: Task;
   dragging: boolean;
   patch: (fn: (t: Task) => Task) => void;
   onHandleDown: (e: React.PointerEvent) => void;
   onRemove: () => void;
 }) {
+  const [adding, setAdding] = useState(false);
   const blockSort = useSortable((from, to) =>
     patch((t) => ({ ...t, blocks: reorder(t.blocks, from, to) }))
   );
 
-  const addBlock = (kind: BlockKind) =>
+  const addBlock = (kind: BlockKind) => {
     patch((t) => ({
       ...t,
       blocks: [
@@ -1035,17 +1039,22 @@ function TaskCard({
         },
       ],
     }));
+    setAdding(false);
+  };
 
   return (
     <section className={`card glass-frosted task${dragging ? " dragging" : ""}`}>
       <div className="task-head">
-        <input
-          className="task-name"
-          value={task.name}
-          maxLength={80}
-          onChange={(e) => patch((t) => ({ ...t, name: e.target.value }))}
-          aria-label="Task name"
-        />
+        <span className="task-title">
+          <span className="task-kicker">Task {index}</span>
+          <input
+            className="task-name"
+            value={task.name}
+            maxLength={80}
+            onChange={(e) => patch((t) => ({ ...t, name: e.target.value }))}
+            aria-label="Task name"
+          />
+        </span>
         <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
       </div>
       <div className="block-list" ref={blockSort.ref}>
@@ -1061,12 +1070,17 @@ function TaskCard({
         ))}
       </div>
 
-      <div className="add-row">
-        <button onClick={() => addBlock("photo")}>+ Photo</button>
-        <button onClick={() => addBlock("text")}>+ Text</button>
-        <button onClick={() => addBlock("number")}>+ Number</button>
-        <button onClick={() => addBlock("buttons")}>+ Buttons</button>
-      </div>
+      {adding && (
+        <div className="field-picker" role="group" aria-label="Choose field type">
+          <button onClick={() => addBlock("photo")}><span>Photo</span><small>Camera or library</small></button>
+          <button onClick={() => addBlock("text")}><span>Text</span><small>Notes or details</small></button>
+          <button onClick={() => addBlock("number")}><span>Number</span><small>Quantity or reading</small></button>
+          <button onClick={() => addBlock("buttons")}><span>Choice</span><small>One-tap options</small></button>
+        </div>
+      )}
+      <button className="add-field-trigger" aria-expanded={adding} onClick={() => setAdding((open) => !open)}>
+        <Plus /> {adding ? "Close" : "Add field"}
+      </button>
     </section>
   );
 }
@@ -1088,17 +1102,20 @@ function BlockRow({
   return (
     <div className={`block${dragging ? " dragging" : ""}`}>
       <div className="block-head">
-        <input
-          className="block-label"
-          value={block.label}
-          maxLength={60}
-          onChange={(e) => onChange({ ...block, label: e.target.value })}
-          aria-label="Block label"
-        />
+        <span className="block-title">
+          <span className="block-kind">{block.kind === "buttons" ? "choice" : block.kind}</span>
+          <input
+            className="block-label"
+            value={block.label}
+            maxLength={60}
+            onChange={(e) => onChange({ ...block, label: e.target.value })}
+            aria-label="Block label"
+          />
+        </span>
         <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
       </div>
       {block.kind === "photo" && (
-        <div className="photo-drop"><span className="lens" />Take or choose a photo</div>
+        <div className="photo-drop"><span className="lens" /><span><strong>Photo upload</strong><small>Camera or photo library</small></span></div>
       )}
       {block.kind === "text" && <div className="faux-input tall">Type here…</div>}
       {block.kind === "number" && (

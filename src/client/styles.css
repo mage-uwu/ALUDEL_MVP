@@ -632,6 +632,13 @@ body {
 /* editor */
 /* one header line: back · name · version · options */
 .editor-top { display: flex; align-items: center; gap: 6px; }
+.editor-top .version {
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
 .title-input {
   border: 0;
   background: transparent;
@@ -686,60 +693,91 @@ body {
 .menu-item:active { background: rgba(255, 255, 255, 0.65); }
 .menu-item.danger { color: #b3261e; }
 
-.task { display: flex; flex-direction: column; gap: 12px; }
-.task-head, .block-head { display: flex; align-items: center; gap: 8px; }
+.task {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(255, 255, 255, 0.82);
+  box-shadow: inset 0 1px 0 #fff, 0 10px 26px -20px rgba(28, 32, 38, 0.4);
+}
+.task.glass-frosted::after { opacity: 0.18; }
+.task-head, .block-head { display: flex; align-items: flex-start; gap: 8px; }
+.task-title, .block-title { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.task-kicker, .block-kind {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.task-kicker { padding: 3px 4px 0; }
 .task-name {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 800;
   flex: 1;
   min-width: 0;
   outline: none;
-  padding: 4px;
+  padding: 4px 4px 2px;
 }
 
 /* blocks */
-.block { display: flex; flex-direction: column; gap: 6px; }
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid rgba(210, 214, 220, 0.86);
+  border-radius: 14px;
+  background: rgba(248, 249, 251, 0.76);
+}
+.block-kind { padding: 2px 4px 0; }
 .block-label {
   border: 0;
   background: transparent;
   font: inherit;
   font-weight: 700;
-  font-size: 16px;
+  font-size: 15px;
   flex: 1;
   min-width: 0;
   outline: none;
-  padding: 4px;
+  padding: 4px 4px 1px;
 }
 /* etched glass drop area */
 .photo-drop {
-  min-height: 140px;
-  border: 2px dashed #c9cdd3;
-  border-radius: 14px;
+  min-height: 68px;
+  border: 1.5px dashed #c9cdd3;
+  border-radius: 12px;
   background: linear-gradient(180deg, rgba(244, 246, 248, 0.9), rgba(236, 239, 242, 0.7));
   box-shadow: inset 0 2px 6px rgba(28, 32, 38, 0.05);
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: var(--ink);
-  font-weight: 700;
-  font-size: 17px;
+  gap: 11px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 13px;
 }
+.photo-drop > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.photo-drop strong { color: var(--ink); font-size: 14px; }
+.photo-drop small { font-size: 12px; }
 .lens {
-  width: 34px; height: 34px;
-  border: 2.5px solid #9aa0a8;
+  width: 28px; height: 28px;
+  border: 2px solid #9aa0a8;
   border-radius: 50%;
   position: relative;
+  flex: none;
 }
 .lens::after {
   content: "";
   position: absolute;
   inset: 6px;
-  border: 2.5px solid #9aa0a8;
+  border: 2px solid #9aa0a8;
   border-radius: 50%;
 }
 /* recessed ceramic wells */
@@ -773,16 +811,16 @@ body {
 .button-key {
   flex: 1 1 130px;
   min-width: 0;
-  min-height: 64px;
+  min-height: 46px;
   border: 1px solid var(--ceramic-border);
-  border-radius: var(--radius);
+  border-radius: 12px;
   background: var(--ceramic);
   box-shadow:
     inset 0 1px 0 #fff,
     inset 0 -2px 5px rgba(28, 32, 38, 0.04),
-    0 8px 16px -10px rgba(28, 32, 38, 0.3);
+    0 5px 12px -9px rgba(28, 32, 38, 0.3);
   font: inherit;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -806,12 +844,58 @@ body {
 }
 .add-row button:active { background: rgba(255, 255, 255, 0.6); }
 .add-row button:disabled { opacity: 0.35; cursor: default; }
-/* the key-count controls belong to one block, so they sit a size below the task's add row */
-.add-row.key-ctl button { min-height: 40px; font-size: 13px; }
+/* the key-count controls belong to one block, so they stay compact and right-aligned */
+.add-row.key-ctl { justify-content: flex-end; }
+.add-row.key-ctl button {
+  flex: 0 1 104px;
+  min-height: 34px;
+  border-style: solid;
+  font-size: 12px;
+}
+
+.add-field-trigger, .add-task {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 44px;
+  border: 1px dashed #bcc2ca;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.34);
+  color: #5f666f;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.add-field-trigger svg, .add-task svg { width: 17px; height: 17px; }
+.add-field-trigger:active, .add-task:active { background: rgba(255, 255, 255, 0.72); }
+.add-task { min-height: 48px; border-style: solid; background: rgba(255, 255, 255, 0.68); }
+.field-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.field-picker button {
+  display: flex;
+  min-width: 0;
+  min-height: 58px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.field-picker span { font-size: 14px; font-weight: 750; }
+.field-picker small { color: var(--muted); font-size: 11px; }
+.field-picker button:active { background: #fff; }
 
 /* drag-to-reorder */
-.task-list { display: flex; flex-direction: column; gap: 14px; }
-.block-list { display: flex; flex-direction: column; gap: 12px; }
+.task-list { display: flex; flex-direction: column; gap: 12px; }
+.block-list { display: flex; flex-direction: column; gap: 9px; }
 .block-list:empty { display: none; }
 .handle {
   cursor: grab;
@@ -831,12 +915,12 @@ body {
 .block.dragging {
   background: rgba(255, 255, 255, 0.95);
   border-radius: 14px;
-  padding: 8px;
-  margin: -8px;
+  margin: 0;
 }
 
 /* icon controls: a quiet circular hit area; the glyph is an SVG, never a typed character */
-.row-controls { display: flex; gap: 2px; }
+.row-controls { display: flex; gap: 0; flex: none; }
+.task .row-controls .icon-btn { width: 34px; height: 34px; }
 .icon-btn {
   display: inline-flex;
   align-items: center;
