@@ -115,7 +115,9 @@ interface ReportMeta {
 interface TokenRef {
   id: string;
   name: string;
+  scope: "imports:write";
   createdAt: string;
+  expiresAt: string;
   lastUsedAt: string | null;
 }
 interface Dispatch {
@@ -1349,7 +1351,7 @@ function Members({
       {admin && (
         <section className="card glass-frosted invite-box">
           <p className="section-label">Integrations</p>
-          <p className="template-meta">A token files reports and asks the vault as a member of this team. It is shown once.</p>
+          <p className="template-meta">A token can only file imported history for this team. It expires after 90 days and is shown once.</p>
           <div className="invite-row">
             <input className="text-input left" value={tokenName} placeholder="Ingest sidecar" maxLength={60}
               onChange={(e) => setTokenName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && tokenName.trim() && mint()} aria-label="Token name" />
@@ -1365,7 +1367,9 @@ function Members({
             <div key={t.id} className="pending">
               <span className="template-text">
                 <span className="member-name">{t.name}</span>
-                <span className="template-meta">{t.lastUsedAt ? `used ${ago(t.lastUsedAt)}` : `made ${ago(t.createdAt)}, never used`}</span>
+                <span className="template-meta">
+                  imports only · expires {new Date(t.expiresAt).toLocaleDateString()} · {t.lastUsedAt ? `used ${ago(t.lastUsedAt)}` : "never used"}
+                </span>
               </span>
               <button className="icon-btn danger" aria-label={`Revoke ${t.name}`} onClick={() => setRevoking(t)}><X /></button>
             </div>

@@ -6,12 +6,10 @@
 //
 // The graph is the sidecar's own shape: record → fact → block → template, plus
 // site and employee. Only that spine is read; classifier nodes are ignored. A
-// template the map has never seen is created from its blocks — kinds as the
-// export declares them (valueKind), inferred from the filed values when it
-// does not — a site from its address (the place is left for the picker), and
-// both are remembered in the map file so a rerun reuses them. Identity is the
-// record's externalId, so a rerun never files twice.
-import { readFileSync, writeFileSync } from "node:fs";
+// templates, blocks, and sites must already be mapped to objects prepared by a
+// team member. The import credential cannot create or inspect ordinary team data.
+// Identity is the record's externalId, so a rerun never files twice.
+import { readFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -48,12 +46,12 @@ const targets = (id, kind) => (out.get(id)?.get(kind) ?? []).map((e) => node.get
 const first = (id, kind) => targets(id, kind)[0] ?? null;
 
 const records = g.nodes.filter((n) => n.kind === "record");
+const props = (n) => n?.properties ?? {};
 const resolved = new Map(records.map(rec => {
   const s = props(rec).semantics;
   if (s !== undefined && (!s || s.schemaVersion !== 1)) throw new Error("Unsupported Breakfast semantics contract");
   return [rec.id, s];
 }));
-const props = (n) => n?.properties ?? {};
 
 // facts of a record, keyed by labelId and by block id
 const factsOf = (rec) => targets(rec.id, "has_fact");
@@ -101,7 +99,6 @@ try {
 } catch {
   /* first run */
 }
-const save = () => !dry && writeFileSync(mapPath, JSON.stringify(map, null, 2) + "\n");
 
 const api = async (path, init = {}) => {
   const res = await fetch(`${base}/api/teams/${team}${path}`, {
@@ -140,19 +137,7 @@ for (const [i, t] of templates.entries()) {
     continue;
   }
   if (dry) continue;
-  // one task per 20 blocks, in the form's own order; ids minted here so the map can keep them
-  const ids = Object.fromEntries(kept.map((b) => [b.graphId, crypto.randomUUID()]));
-  const tasks = [];
-  for (let k = 0; k < kept.length; k += 20)
-    tasks.push({
-      name: tasks.length ? `${name} (${tasks.length + 1})`.slice(0, 80) : name,
-      blocks: kept.slice(k, k + 20).map((b) => ({ id: ids[b.graphId], kind: b.kind, label: b.label, unit: "", options: b.options ?? [] })),
-    });
-  const { id } = await api("/templates", { method: "POST", body: JSON.stringify({ name }) });
-  await api(`/templates/${id}`, { method: "PUT", body: JSON.stringify({ name, tasks, version: 1 }) });
-  map.templates[t.id] = { id, blocks: ids, kinds: Object.fromEntries(kept.map((b) => [b.graphId, b.kind])) };
-  save();
-  console.log(`  created ${id}`);
+  throw new Error(`Template ${t.id} is not mapped; create it in ALUDEL and add its template and block IDs to ${mapPath}`);
 }
 
 // ——— sites ———
@@ -169,10 +154,7 @@ for (const s of g.nodes.filter((n) => n.kind === "site")) {
   const clientName = (mostCommon(mine.map(nameOf).filter(Boolean)) || address || "Imported site").slice(0, 80);
   console.log(`site ${s.id} → "${clientName}" · ${address || "no address"} (${mine.length} records)`);
   if (dry) continue;
-  const { id } = await api("/sites", { method: "POST", body: JSON.stringify({ clientName, locationNote: address.slice(0, 240) }) });
-  map.sites[s.id] = id;
-  save();
-  console.log(`  created ${id}; pick its place in the app`);
+  throw new Error(`Site ${s.id} is not mapped; create it in ALUDEL and add its ID to ${mapPath}`);
 }
 
 // ——— when the work was done: the form's date and time, in the shop's zone ———
@@ -217,7 +199,7 @@ for (const rec of records) {
   const t = first(rec.id, "instance_of"), s = first(rec.id, "at_site");
   const tm = t && map.templates[t.id], siteId = s && map.sites[s.id];
   const when = performedAt(rec);
-  // a dry run has not created anything yet, so an unmapped template or site is one that would be
+  // A dry run can describe unmapped input; a live run rejects it before filing.
   const reason = !t ? "no template" : !s ? "no site" : !when ? "no date of service" : !tm && !dry ? "template not mapped" : !siteId && !dry ? "site not mapped" : null;
   if (reason) {
     skipped.push({ id: rec.id, reason });
@@ -251,7 +233,7 @@ for (const s of skipped) console.log(`skip ${s.id}: ${s.reason}`);
 console.log(`${payload.length} records ready${skipped.length ? `, ${skipped.length} skipped` : ""}`);
 if (dry) process.exit(0);
 
-// the gate takes 200 records and 128 KB a call; a batch is whichever fills first
+// Keep requests comfortably below the gate's 1 MiB limit.
 const BATCH = 200, BYTES = 120 * 1024;
 let filed = 0, duplicate = 0, failed = 0;
 for (let i = 0; i < payload.length; ) {

@@ -163,11 +163,15 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
   let db = await mf.getD1Database("DB");
   const tokenA = "a".repeat(43), tokenB = "b".repeat(43);
   for (const [team, token] of [[teamA, tokenA], [teamB, tokenB]]) {
+    const user = randomUUID();
     await db.prepare("INSERT INTO teams (id,name,created_at) VALUES (?,?,?)").bind(team, team, new Date().toISOString()).run();
-    await db.prepare("INSERT INTO tokens (id,team_id,name,created_by,created_at) VALUES (?,?,?,?,?)").bind(hash(token), team, "Import test", "test", new Date().toISOString()).run();
+    await db.prepare("INSERT INTO users(id,google_sub,email,name,created_at) VALUES(?,?,?,?,?)").bind(user, user, `${user}@example.com`, "Import test", new Date().toISOString()).run();
+    await db.prepare("INSERT INTO memberships(team_id,user_id,role,created_at) VALUES(?,?,?,?)").bind(team, user, "owner", new Date().toISOString()).run();
+    await db.prepare("INSERT INTO sessions(id,user_id,created_at,last_seen,expires_at) VALUES(?,?,?,?,?)").bind(hash(token), user, new Date().toISOString(), new Date().toISOString(), new Date(Date.now() + 86_400_000).toISOString()).run();
   }
+  const auth = token => ({ cookie: `aludel_session=${token}`, origin: "http://localhost" });
   const call = async (team, path = "", init = {}, token = tokenA) => {
-    const response = await mf.dispatchFetch(`http://localhost/api/teams/${team}/breakfast/jobs${path}`, { ...init, headers: { authorization: `Bearer aludel_${token}`, ...init.headers } });
+    const response = await mf.dispatchFetch(`http://localhost/api/teams/${team}/breakfast/jobs${path}`, { ...init, headers: { ...auth(token), ...init.headers } });
     // Fully drain the runtime's response, even when a test only checks status.
     return new Response(await response.arrayBuffer(), { status: response.status, headers: response.headers });
   };
@@ -203,9 +207,9 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     assert.equal((await send(id)).status, 202); assert.equal(uploads, 1);
     assert.equal((await call(teamB, `/${id}`, {}, tokenB)).status, 404);
     imported = await waitFor(id); assert.equal(imported.filed, 2); assert.equal(imported.rejected, 0);
-    const reports = await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports`, { headers: { authorization: `Bearer aludel_${tokenA}` } });
+    const reports = await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports`, { headers: auth(tokenA) });
     assert.equal((await reports.json()).length, 2);
-    const query = await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/vault/query`, { method: "POST", headers: { authorization: `Bearer aludel_${tokenA}`, "content-type": "application/json" }, body: JSON.stringify({ select: { agg: "count" } }) });
+    const query = await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/vault/query`, { method: "POST", headers: { ...auth(tokenA), "content-type": "application/json" }, body: JSON.stringify({ select: { agg: "count" } }) });
     assert.equal((await query.json()).groups[0].value, 2);
   });
   await t.test("a second upload reuses templates/sites and recognizes filed records", async () => {
@@ -309,7 +313,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
       assert.deepEqual(JSON.parse(site.phones), [`(570) 555-010${i}`]);
     }
     assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM dispatches WHERE template_id=?").bind(template.id).first()).n,4);
-    for(const site of sites) assert.equal((await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports?site=${site.id}&template=${template.id}&limit=100`,{headers:{authorization:`Bearer aludel_${tokenA}`}}).then(r=>r.json())).length,15);
+    for(const site of sites) assert.equal((await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports?site=${site.id}&template=${template.id}&limit=100`,{headers:auth(tokenA)}).then(r=>r.json())).length,15);
     const custom={tasks:[{...doc.tasks[0],name:"Our repair checklist",blocks:doc.tasks[0].blocks.map(b=>b.kind==="buttons"?{...b,options:[...b.options,"RECHECK"]}:b)}]};
     await db.prepare("UPDATE templates SET name=?,doc=?,version=2 WHERE id=?").bind("Our customized repair report",JSON.stringify(custom),template.id).run();
     await db.prepare("UPDATE sites SET client_name=?,emails=?,position=9 WHERE id=?").bind("Our existing client",'["verified@example.com"]',sites[0].id).run();
@@ -338,7 +342,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
     assert.equal((await call(teamB,`/${pending.id}/pending/${list[0].seq}`,{},tokenB)).status,404);
     const filed=await call(teamA,`/${pending.id}/pending/${list[0].seq}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({siteId:sites[0].id,date:"2026-01-02"})});
     assert.equal(filed.status,200,await filed.clone().text());const result=await filed.json();
-    const report=await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports/${result.id}`,{headers:{authorization:`Bearer aludel_${tokenA}`}}).then(r=>r.json());
+    const report=await mf.dispatchFetch(`http://localhost/api/teams/${teamA}/reports/${result.id}`,{headers:auth(tokenA)}).then(r=>r.json());
     assert.equal(report.semantics.client.emails[0],"client0@example.com");assert.equal(report.semantics.date.value,"2026-01-02");
     assert.equal(report.templateId,template.id);assert.equal(report.siteId,sites[0].id);
     assert.deepEqual(report.history.sourceDocument,manual.payload.sourceDocument);
@@ -358,8 +362,11 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
   await t.test("500 visits from the Rust producer reach populated Aludel sites", { skip: !process.env.BFAST_SITE_CONTACT_TEST_EXPORT }, async () => {
     const produced = JSON.parse(await readFile(process.env.BFAST_SITE_CONTACT_TEST_EXPORT, "utf8"));
     const team = randomUUID(), token = "d".repeat(43), now = new Date().toISOString();
+    const user = randomUUID();
     await db.prepare("INSERT INTO teams(id,name,created_at) VALUES(?,?,?)").bind(team, "Rust bridge", now).run();
-    await db.prepare("INSERT INTO tokens(id,team_id,name,created_by,created_at) VALUES(?,?,?,?,?)").bind(hash(token), team, "Bridge", "test", now).run();
+    await db.prepare("INSERT INTO users(id,google_sub,email,name,created_at) VALUES(?,?,?,?,?)").bind(user, user, `${user}@example.com`, "Bridge", now).run();
+    await db.prepare("INSERT INTO memberships(team_id,user_id,role,created_at) VALUES(?,?,?,?)").bind(team, user, "owner", now).run();
+    await db.prepare("INSERT INTO sessions(id,user_id,created_at,last_seen,expires_at) VALUES(?,?,?,?,?)").bind(hash(token), user, now, now, new Date(Date.now() + 86_400_000).toISOString()).run();
     largeItems = produced.items; pageSize = 128;
     const form = new FormData(); form.append("files", new File(["producer fixture"], "visits.csv", { type: "text/csv" }));
     const request = new Response(form);
@@ -383,7 +390,7 @@ test("real Worker + D1 + SQLite Durable Object import handshake", { timeout: 240
       assert.equal(site.client_name, expected.client.name);
       assert.deepEqual(JSON.parse(site.emails), expected.client.emails);
       assert.deepEqual(JSON.parse(site.phones), expected.client.phones);
-      const response = await mf.dispatchFetch(`http://localhost/api/teams/${team}/vault/reports?site=${site.id}&limit=1`, { headers: { authorization: `Bearer aludel_${token}` } });
+      const response = await mf.dispatchFetch(`http://localhost/api/teams/${team}/vault/reports?site=${site.id}&limit=1`, { headers: auth(token) });
       const vault = await response.json(); assert.equal(vault.total, 125);
     }
     largeItems = null; pageSize = 2;

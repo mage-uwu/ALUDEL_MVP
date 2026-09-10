@@ -47,13 +47,20 @@ test("real Vault archives source independently of templates and serves identical
   await mf.ready; await (await mf.dispatchFetch("http://localhost/api/me")).arrayBuffer();
   const db = await mf.getD1Database("DB"), team = randomUUID(), other = randomUUID(), site = randomUUID(), template = randomUUID(), token = "h".repeat(43), otherToken = "o".repeat(43), now = new Date().toISOString();
   for (const [id, key] of [[team, token], [other, otherToken]]) {
+    const user = randomUUID();
     await db.prepare("INSERT INTO teams(id,name,created_at) VALUES(?,?,?)").bind(id, "History", now).run();
     await db.prepare("INSERT INTO tokens(id,team_id,name,created_by,created_at) VALUES(?,?,?,?,?)").bind(createHash("sha256").update(key).digest("base64url"), id, "Import", "test", now).run();
+    await db.prepare("INSERT INTO users(id,google_sub,email,name,created_at) VALUES(?,?,?,?,?)").bind(user, user, `${user}@example.com`, "History test", now).run();
+    await db.prepare("INSERT INTO memberships(team_id,user_id,role,created_at) VALUES(?,?,?,?)").bind(id, user, "owner", now).run();
+    await db.prepare("INSERT INTO sessions(id,user_id,created_at,last_seen,expires_at) VALUES(?,?,?,?,?)").bind(createHash("sha256").update(key).digest("base64url"), user, now, now, new Date(Date.now() + 86_400_000).toISOString()).run();
   }
   await db.prepare("INSERT INTO sites(id,team_id,client_name,created_at,updated_at) VALUES(?,?,?,?,?)").bind(site, team, "Ada", now, now).run();
   await db.prepare("INSERT INTO templates(id,team_id,name,doc,updated_at) VALUES(?,?,?,?,?)").bind(template, team, "Repair", JSON.stringify({ tasks: [{ id: randomUUID(), name: "Live form", blocks: [{ id: randomUUID(), kind: "number", label: "Unrelated field" }] }] }), now).run();
   const call = async (path, body, target = team, key = token) => {
-    const res = await mf.dispatchFetch(`http://localhost/api/teams/${target}${path}`, { method: body === undefined ? "GET" : "POST", headers: { authorization: `Bearer aludel_${key}`, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const auth = path === "/import"
+      ? { authorization: `Bearer aludel_${key}` }
+      : { cookie: `aludel_session=${key}`, origin: "http://localhost" };
+    const res = await mf.dispatchFetch(`http://localhost/api/teams/${target}${path}`, { method: body === undefined ? "GET" : "POST", headers: { ...auth, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return new Response(await res.arrayBuffer(), { status: res.status, headers: res.headers });
   };
   const notes = "  • untouched note <script>alert('x')</script>\r\n".repeat(4000);

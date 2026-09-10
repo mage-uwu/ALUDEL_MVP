@@ -29,6 +29,7 @@ import {
   type User,
 } from "./auth";
 import { ensureSchema } from "./schema";
+import { consumeRateLimit, type RatePolicy } from "./rate-limit";
 import { readVaultBrowse } from "./vault-browse";
 import { VAULT_DELETE_CONFIRMATION } from "../shared/vault";
 import { SITES_DELETE_CONFIRMATION } from "../shared/sites";
@@ -43,6 +44,8 @@ export interface Env {
   APP_ORIGIN?: string;
   /** Optional comma-separated domain allow-list, e.g. "acme.com,acme.co.uk". */
   ALLOWED_EMAIL_DOMAINS?: string;
+  /** Explicit opt-in for deployments that intentionally allow every Google account. */
+  ALLOW_PUBLIC_SIGN_IN?: string;
   /** Browser key for the Maps JavaScript API — public by nature, so restrict it by HTTP referrer. */
   GOOGLE_MAPS_BROWSER_KEY?: string;
   /** Map ID (Cloud-based map style); advanced markers need one. Defaults to Google's demo id. */
@@ -76,13 +79,35 @@ const HEADERS = {
   "x-content-type-options": "nosniff",
 };
 
-const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), { status, headers: HEADERS });
+const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(data), { status, headers: { ...HEADERS, ...headers } });
 const error = (status: number, message: string) => json({ error: message }, status);
 
 const INVITE_TTL_S = 7 * 24 * 3600;
+const TOKEN_TTL_S = 90 * 24 * 3600;
 const UUID = "[0-9a-fA-F-]{36}";
 const nowIso = () => new Date().toISOString();
+
+const RATES = {
+  login: { limit: 20, windowSeconds: 10 * 60 },
+  chat: { limit: 30, windowSeconds: 60 * 60 },
+  teamCreate: { limit: 5, windowSeconds: 24 * 60 * 60 },
+  breakfast: { limit: 30, windowSeconds: 60 * 60 },
+  import: { limit: 120, windowSeconds: 60 * 60 },
+  optimize: { limit: 20, windowSeconds: 60 * 60 },
+} satisfies Record<string, RatePolicy>;
+
+async function throttle(
+  env: Env,
+  bucket: string,
+  subject: string,
+  policy: RatePolicy
+): Promise<Response | null> {
+  const result = await consumeRateLimit(env.DB, bucket, subject, policy);
+  return result.allowed
+    ? null
+    : json({ error: "Too many requests" }, 429, { "retry-after": String(result.retryAfter) });
+}
 
 async function readBody(req: Request, max: number = LIMITS.body): Promise<Record<string, unknown> | null> {
   if (Number(req.headers.get("content-length") ?? 0) > max) return null;
@@ -138,7 +163,7 @@ async function teamRoutes(
   user: User,
   teamId: string,
   rest: string,
-  /** An integration token: a member of exactly this team, proven before we get here. */
+  /** A scoped integration token already authorized for one route in this team. */
   asMember = false
 ): Promise<Response> {
   const role = asMember ? "member" : await requireMember(env, user, teamId);
@@ -151,6 +176,8 @@ async function teamRoutes(
     const vault = vaultFor(env, teamId);
     if (req.method === "GET") return json({ configured: Boolean(breakfastKey(env)), jobs: await vault.importJobs() });
     if (req.method === "POST") {
+      const limited = await throttle(env, "breakfast", `${teamId}:${user.id}`, RATES.breakfast);
+      if (limited) return limited;
       const incoming = new URL(req.url);
       const target = new URL("https://vault.internal/breakfast/jobs");
       target.searchParams.set("teamId", teamId);
@@ -187,6 +214,8 @@ async function teamRoutes(
       return job ? json(job) : error(404, "Not found");
     }
     if (req.method === "POST" && importJob[2]) {
+      const limited = await throttle(env, "breakfast", `${teamId}:${user.id}`, RATES.breakfast);
+      if (limited) return limited;
       const existing = await vault.importJob(importJob[1]!);
       if (!existing) return error(404, "Not found");
       const job = await vault.resumeImport(importJob[1]!);
@@ -617,13 +646,15 @@ async function teamRoutes(
     return json({ ok: true });
   }
 
-  // ——— integration tokens: a sidecar files and asks as a member of this team ———
+  // ——— integration tokens: bounded credentials for the direct import endpoint ———
   if (rest === "/tokens") {
     if (!admin) return error(403, "Admins only");
     if (req.method === "GET") {
       const { results } = await env.DB.prepare(
-        `SELECT id, name, created_at AS createdAt, last_used_at AS lastUsedAt FROM tokens
-         WHERE team_id = ? AND revoked_at IS NULL ORDER BY created_at DESC`
+        `SELECT id, name, scope, created_at AS createdAt, expires_at AS expiresAt,
+                last_used_at AS lastUsedAt FROM tokens
+         WHERE team_id = ? AND revoked_at IS NULL AND datetime(expires_at) > datetime('now')
+         ORDER BY created_at DESC`
       )
         .bind(teamId)
         .all();
@@ -633,11 +664,14 @@ async function teamRoutes(
       const name = field((await readBody(req))?.name, 60) || "Integration";
       const raw = randomToken();
       const id = await hashToken(raw);
-      await env.DB.prepare("INSERT INTO tokens (id, team_id, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
-        .bind(id, teamId, name, user.id, nowIso())
+      const expiresAt = new Date(Date.now() + TOKEN_TTL_S * 1000).toISOString();
+      await env.DB.prepare(
+        "INSERT INTO tokens (id, team_id, name, scope, created_by, created_at, expires_at) VALUES (?, ?, ?, 'imports:write', ?, ?, ?)"
+      )
+        .bind(id, teamId, name, user.id, nowIso(), expiresAt)
         .run();
       // the raw token exists only in this response; the row keeps its hash
-      return json({ id, name, token: `aludel_${raw}` }, 201);
+      return json({ id, name, scope: "imports:write", expiresAt, token: `aludel_${raw}` }, 201);
     }
     return error(405, "Method not allowed");
   }
@@ -652,6 +686,8 @@ async function teamRoutes(
 
   // ——— import: old documents, already read into records, filed like field work ———
   if (rest === "/import" && req.method === "POST") {
+    const limited = await throttle(env, "import", `${teamId}:${user.id}`, RATES.import);
+    if (limited) return limited;
     const body = await readBody(req, 1024 * 1024);
     const records = Array.isArray(body?.records) ? body.records : [];
     if (!records.length || records.length > 200) return error(422, "records: 1–200 of them, within 1 MiB");
@@ -776,6 +812,8 @@ async function teamRoutes(
   if (rest === "/plan" && req.method === "POST") {
     if (!admin) return error(403, "Admins only");
     if (!configured(env)) return error(503, "Route optimization is not set up for this deployment");
+    const limited = await throttle(env, "optimize", teamId, RATES.optimize);
+    if (limited) return limited;
     const ask = readInput(await readBody(req));
     if (!ask) return error(422, "Routes must be 1–10, service 0–240 minutes, and the window a day at most");
     try {
@@ -815,27 +853,43 @@ async function teamRoutes(
 }
 
 const BEARER = /^Bearer\s+aludel_([A-Za-z0-9_-]{43})$/;
+type TokenScope = "imports:write";
+interface TokenPrincipal {
+  user: User;
+  teamId: string;
+  scope: TokenScope;
+}
 
-/** An integration token, if the request carries one: a member of one team, and no one anywhere else. */
-async function tokenPrincipal(req: Request, env: Env): Promise<{ user: User; teamId: string } | null> {
+/** A live integration token, if the request carries one. */
+async function tokenPrincipal(req: Request, env: Env): Promise<TokenPrincipal | null> {
   const m = req.headers.get("authorization")?.match(BEARER);
   if (!m) return null;
   const id = await hashToken(m[1]!);
-  const row = await env.DB.prepare("SELECT id, team_id AS teamId, name, last_used_at AS lastUsed FROM tokens WHERE id = ? AND revoked_at IS NULL")
+  const row = await env.DB.prepare(
+    `SELECT id, team_id AS teamId, name, scope, last_used_at AS lastUsed
+     FROM tokens
+     WHERE id = ? AND revoked_at IS NULL AND datetime(expires_at) > datetime('now')`
+  )
     .bind(id)
-    .first<{ id: string; teamId: string; name: string; lastUsed: string | null }>();
+    .first<{ id: string; teamId: string; name: string; scope: TokenScope; lastUsed: string | null }>();
   if (!row) return null;
   if (!row.lastUsed || Date.parse(row.lastUsed) < Date.now() - 3600_000)
     await env.DB.prepare("UPDATE tokens SET last_used_at = ? WHERE id = ?").bind(nowIso(), id).run();
-  return { teamId: row.teamId, user: { id: `token:${row.id.slice(0, 12)}`, email: `${row.name}@integration`, name: row.name, picture: "" } };
+  return {
+    teamId: row.teamId,
+    scope: row.scope,
+    user: { id: `token:${row.id.slice(0, 12)}`, email: `${row.name}@integration`, name: row.name, picture: "" },
+  };
 }
 
-async function api(req: Request, env: Env, path: string): Promise<Response> {
-  const token = await tokenPrincipal(req, env);
+const tokenAllows = (token: TokenPrincipal, path: string, method: string): boolean =>
+  token.scope === "imports:write" && method === "POST" && path === `/teams/${token.teamId}/import`;
+
+async function api(req: Request, env: Env, path: string, token: TokenPrincipal | null): Promise<Response> {
   const user = token?.user ?? (await currentUser(req, env));
   if (!user) return error(401, "Sign in required");
-  // a token reaches its own team's routes and nothing else: no /me, no chats, no other team
   if (token && !path.startsWith(`/teams/${token.teamId}/`)) return error(404, "Not found");
+  if (token && !tokenAllows(token, path, req.method)) return error(403, "Token scope does not allow this route");
 
   if (path === "/me" && req.method === "GET") {
     const { results } = await env.DB.prepare(
@@ -868,6 +922,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   }
   if (path === "/chat" && req.method === "POST") {
     if (!env.XAI_API_KEY) return error(503, "The assistant is not set up for this deployment");
+    const limited = await throttle(env, "chat", user.id, RATES.chat);
+    if (limited) return limited;
     const body = await readBody(req);
     const content = field(body?.content, CHAT.chars);
     if (!content) return error(422, "Say something first");
@@ -896,6 +952,8 @@ async function api(req: Request, env: Env, path: string): Promise<Response> {
   }
 
   if (path === "/teams" && req.method === "POST") {
+    const limited = await throttle(env, "team-create", user.id, RATES.teamCreate);
+    if (limited) return limited;
     const body = await readBody(req);
     const name = field(body?.name, LIMITS.name);
     if (!name) return error(422, "Team name required");
@@ -959,7 +1017,15 @@ export default {
     try {
       await ensureSchema(env.DB);
 
-      if (url.pathname === "/auth/login") return startLogin(req, env);
+      if (url.pathname === "/auth/login") {
+        const limited = await throttle(
+          env,
+          "login",
+          req.headers.get("cf-connecting-ip") || "unknown",
+          RATES.login
+        );
+        return limited ?? startLogin(req, env);
+      }
       if (url.pathname === "/auth/callback") return finishLogin(req, env);
       if (url.pathname === "/auth/logout" && req.method === "POST") {
         if (!sameOrigin(req, env)) return error(403, "Cross-origin request refused");
@@ -967,10 +1033,18 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/")) {
-        // the Origin check guards cookies; a bearer token is never sent by a browser on someone's behalf
-        const bearer = BEARER.test(req.headers.get("authorization") ?? "");
-        if (!bearer && !sameOrigin(req, env)) return error(403, "Cross-origin request refused");
-        return await api(req, env, url.pathname.slice(4));
+        // The presence of an Authorization header commits the request to token auth:
+        // invalid credentials never fall back to a browser cookie.
+        const authorization = req.headers.get("authorization");
+        let token: TokenPrincipal | null = null;
+        if (authorization !== null) {
+          if (!BEARER.test(authorization)) return error(401, "Invalid integration token");
+          token = await tokenPrincipal(req, env);
+          if (!token) return error(401, "Invalid or expired integration token");
+        } else if (!sameOrigin(req, env)) {
+          return error(403, "Cross-origin request refused");
+        }
+        return await api(req, env, url.pathname.slice(4), token);
       }
 
       return error(404, "Not found");

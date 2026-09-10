@@ -61,10 +61,19 @@ const TABLES = [
      id TEXT PRIMARY KEY,
      team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
      name TEXT NOT NULL,
+     scope TEXT NOT NULL DEFAULT 'imports:write' CHECK (scope = 'imports:write'),
      created_by TEXT NOT NULL,
      created_at TEXT NOT NULL,
+     expires_at TEXT NOT NULL DEFAULT (datetime('now', '+90 days')),
      last_used_at TEXT,
      revoked_at TEXT
+   )`,
+  `CREATE TABLE IF NOT EXISTS rate_limits (
+     bucket TEXT NOT NULL,
+     subject TEXT NOT NULL,
+     window INTEGER NOT NULL,
+     hits INTEGER NOT NULL,
+     PRIMARY KEY (bucket, subject)
    )`,
   // lists are containers of worksites; a site may sit in at most one
   `CREATE TABLE IF NOT EXISTS lists (
@@ -149,6 +158,10 @@ export function ensureSchema(db: D1Database): Promise<unknown> {
     await addColumn("ALTER TABLE sites ADD COLUMN position INTEGER NOT NULL DEFAULT 0");
     await addColumn("ALTER TABLE teams ADD COLUMN depot TEXT");
     await addColumn("ALTER TABLE teams ADD COLUMN plan TEXT");
+    // Existing integration credentials become bounded, import-only credentials.
+    await addColumn("ALTER TABLE tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'imports:write'");
+    await addColumn("ALTER TABLE tokens ADD COLUMN expires_at TEXT");
+    await db.prepare("UPDATE tokens SET expires_at = datetime(created_at, '+90 days') WHERE expires_at IS NULL").run();
     await db.batch(INDEXES.map((sql) => db.prepare(sql)));
   })()).catch((e) => {
     ready = null;

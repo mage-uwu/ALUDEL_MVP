@@ -22,14 +22,21 @@ test("Vault browses completed paperwork through the real Worker, D1 and tenant S
   const db = await mf.getD1Database("DB"), teamA = randomUUID(), teamB = randomUUID();
   const tokenA = "a".repeat(43), tokenB = "b".repeat(43), now = new Date().toISOString();
   for (const [id, token] of [[teamA, tokenA], [teamB, tokenB]]) {
+    const user = randomUUID();
     await db.prepare("INSERT INTO teams(id,name,created_at) VALUES(?,?,?)").bind(id, "Vault test", now).run();
     await db.prepare("INSERT INTO tokens(id,team_id,name,created_by,created_at) VALUES(?,?,?,?,?)")
       .bind(createHash("sha256").update(token).digest("base64url"), id, "Vault test", "test", now).run();
+    await db.prepare("INSERT INTO users(id,google_sub,email,name,created_at) VALUES(?,?,?,?,?)").bind(user, user, `${user}@example.com`, "Vault test", now).run();
+    await db.prepare("INSERT INTO memberships(team_id,user_id,role,created_at) VALUES(?,?,?,?)").bind(id, user, "owner", now).run();
+    await db.prepare("INSERT INTO sessions(id,user_id,created_at,last_seen,expires_at) VALUES(?,?,?,?,?)").bind(createHash("sha256").update(token).digest("base64url"), user, now, now, new Date(Date.now() + 86_400_000).toISOString()).run();
   }
   const call = async (path, { team = teamA, token = tokenA, body } = {}) => {
+    const auth = path === "/import"
+      ? { authorization: `Bearer aludel_${token}` }
+      : { cookie: `aludel_session=${token}`, origin: "http://localhost" };
     const res = await mf.dispatchFetch(`http://localhost/api/teams/${team}${path}`, {
       method: body === undefined ? "GET" : "POST",
-      headers: { authorization: `Bearer aludel_${token}`, "content-type": "application/json" },
+      headers: { ...auth, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     return { status: res.status, data: await res.json() };

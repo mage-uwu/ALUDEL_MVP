@@ -34,14 +34,13 @@ preserves the current phone/address fields when older clients omit them.
 
 **Auth.** An integration token (`Members → Integrations`, shown once, stored as
 SHA-256 in D1 `tokens`) is `Authorization: Bearer aludel_<43 url-safe chars>`.
-It acts as a *member* of exactly one team: `/api/teams/<its team>/…` only; no
-`/me`, no chats, no admin routes, no Origin check. Its principal is
+It has the `imports:write` scope, expires after 90 days, and can only call the
+endpoint below for its team. Its principal is
 `{ id: "token:<12 hex>", name: <token name>, email: "<name>@integration" }` — that
-is what lands in `by_user`, in `by_name` when a record names nobody, and in
-`dispatches.created_by` for dispatches the import mints.
+is what lands in `by_user` and in `by_name` when a record names nobody.
 
 **Endpoint.** `POST /api/teams/<team>/import`, JSON, `{ records: [ … ] }`,
-1–200 records **and ≤ 128 KB body** (`LIMITS.body`; an oversized body reads as
+1–200 records **and ≤ 1 MiB body** (an oversized body reads as
 no records → 422 for the whole call). Each record:
 
 | field | rule |
@@ -88,8 +87,9 @@ Block kinds: `photo | text | number | buttons`. Limits: name 80, label 60,
 unit 12, buttons key 24, options 1–6 (empty → `["PASS","FAIL"]`), tasks ≤ 30,
 blocks per task ≤ 20 (so ≤ 600 blocks per template). Client-supplied block
 ids (`/^[0-9a-fA-F-]{1,36}$/`) are kept on `PUT /templates/:id`; the mapper
-mints UUIDs and remembers them in the map file. `PUT` takes `version` for
-optimistic concurrency (409 on mismatch); a fresh `POST /templates` is version 1.
+uses the template and block UUIDs recorded in its prebuilt map file. `PUT` takes
+`version` for optimistic concurrency (409 on mismatch); a fresh `POST /templates`
+is version 1.
 
 Each filled block becomes one fact row:
 
