@@ -998,7 +998,7 @@ function Editor({ teamId, id, onBack }: { teamId: string; id: string; onBack: ()
       <button className="add-task" onClick={addTask}><Plus /> Add task</button>
       {dirty && (
         <div className="dock">
-          <button className="big-btn primary" onClick={save}>Save · v{tpl.version + 1}</button>
+          <button className="big-btn primary" onClick={save}>Save <span>v{tpl.version + 1}</span></button>
         </div>
       )}
     </div>
@@ -1043,18 +1043,16 @@ function TaskCard({
   };
 
   return (
-    <section className={`card glass-frosted task${dragging ? " dragging" : ""}`}>
+    <section className={`task${dragging ? " dragging" : ""}`}>
       <div className="task-head">
-        <span className="task-title">
-          <span className="task-kicker">Task {index}</span>
-          <input
-            className="task-name"
-            value={task.name}
-            maxLength={80}
-            onChange={(e) => patch((t) => ({ ...t, name: e.target.value }))}
-            aria-label="Task name"
-          />
-        </span>
+        <span className="task-index" aria-hidden="true">{String(index).padStart(2, "0")}</span>
+        <input
+          className="task-name"
+          value={task.name}
+          maxLength={80}
+          onChange={(e) => patch((t) => ({ ...t, name: e.target.value }))}
+          aria-label={`Task ${index} name`}
+        />
         <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
       </div>
       <div className="block-list" ref={blockSort.ref}>
@@ -1079,7 +1077,7 @@ function TaskCard({
         </div>
       )}
       <button className="add-field-trigger" aria-expanded={adding} onClick={() => setAdding((open) => !open)}>
-        <Plus /> {adding ? "Close" : "Add field"}
+        <Plus /> {adding ? "Done" : "Add field"}
       </button>
     </section>
   );
@@ -1102,16 +1100,14 @@ function BlockRow({
   return (
     <div className={`block${dragging ? " dragging" : ""}`}>
       <div className="block-head">
-        <span className="block-title">
-          <span className="block-kind">{block.kind === "buttons" ? "choice" : block.kind}</span>
-          <input
-            className="block-label"
-            value={block.label}
-            maxLength={60}
-            onChange={(e) => onChange({ ...block, label: e.target.value })}
-            aria-label="Block label"
-          />
-        </span>
+        <span className="block-kind">{block.kind === "buttons" ? "choice" : block.kind}</span>
+        <input
+          className="block-label"
+          value={block.label}
+          maxLength={60}
+          onChange={(e) => onChange({ ...block, label: e.target.value })}
+          aria-label="Block label"
+        />
         <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
       </div>
       {block.kind === "photo" && (
