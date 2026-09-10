@@ -1021,17 +1021,19 @@ function TaskCard({
   onRemove: () => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const blockSort = useSortable((from, to) =>
     patch((t) => ({ ...t, blocks: reorder(t.blocks, from, to) }))
   );
 
   const addBlock = (kind: BlockKind) => {
+    const blockId = uid();
     patch((t) => ({
       ...t,
       blocks: [
         ...t.blocks,
         {
-          id: uid(),
+          id: blockId,
           kind,
           label: DEFAULT_LABEL[kind],
           unit: "",
@@ -1040,6 +1042,7 @@ function TaskCard({
       ],
     }));
     setAdding(false);
+    setEditingId(blockId);
   };
 
   return (
@@ -1061,9 +1064,15 @@ function TaskCard({
             key={block.id}
             block={block}
             dragging={blockSort.dragging === i}
+            editing={editingId === block.id}
+            onEdit={() => setEditingId(block.id)}
+            onDone={() => setEditingId(null)}
             onChange={(b) => patch((t) => ({ ...t, blocks: t.blocks.map((x) => (x.id === b.id ? b : x)) }))}
             onHandleDown={blockSort.start(i)}
-            onRemove={() => patch((t) => ({ ...t, blocks: t.blocks.filter((x) => x.id !== block.id) }))}
+            onRemove={() => {
+              setEditingId(null);
+              patch((t) => ({ ...t, blocks: t.blocks.filter((x) => x.id !== block.id) }));
+            }}
           />
         ))}
       </div>
@@ -1076,7 +1085,10 @@ function TaskCard({
           <button onClick={() => addBlock("buttons")}><span>Choice</span><small>One-tap options</small></button>
         </div>
       )}
-      <button className="add-field-trigger" aria-expanded={adding} onClick={() => setAdding((open) => !open)}>
+      <button className="add-field-trigger" aria-expanded={adding} onClick={() => {
+        setAdding((open) => !open);
+        setEditingId(null);
+      }}>
         <Plus /> {adding ? "Done" : "Add field"}
       </button>
     </section>
@@ -1086,52 +1098,80 @@ function TaskCard({
 function BlockRow({
   block,
   dragging,
+  editing,
+  onEdit,
+  onDone,
   onChange,
   onHandleDown,
   onRemove,
 }: {
   block: Block;
   dragging: boolean;
+  editing: boolean;
+  onEdit: () => void;
+  onDone: () => void;
   onChange: (b: Block) => void;
   onHandleDown: (e: React.PointerEvent) => void;
   onRemove: () => void;
 }) {
   const setOptions = (options: string[]) => onChange({ ...block, options });
   return (
-    <div className={`block${dragging ? " dragging" : ""}`}>
-      <div className="block-head">
-        <span className="block-kind">{block.kind === "buttons" ? "choice" : block.kind}</span>
-        <input
-          className="block-label"
-          value={block.label}
-          maxLength={60}
-          onChange={(e) => onChange({ ...block, label: e.target.value })}
-          aria-label="Block label"
-        />
-        <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
-      </div>
+    <div
+      className={`block ${editing ? "editing" : "ready"}${dragging ? " dragging" : ""}`}
+      role={editing ? undefined : "button"}
+      tabIndex={editing ? undefined : 0}
+      aria-label={editing ? undefined : `Edit ${block.label} field`}
+      onClick={editing ? undefined : onEdit}
+      onKeyDown={editing ? undefined : (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onEdit();
+        }
+      }}
+    >
+      {editing ? (
+        <div className="block-head">
+          <span className="block-kind">{block.kind === "buttons" ? "choice" : block.kind}</span>
+          <input
+            className="block-label"
+            value={block.label}
+            maxLength={60}
+            onChange={(e) => onChange({ ...block, label: e.target.value })}
+            aria-label="Field label"
+          />
+          <button className="block-done" onClick={onDone}>Done</button>
+          <RowControls onHandleDown={onHandleDown} onRemove={onRemove} />
+        </div>
+      ) : (
+        <div className="block-ready-head">
+          <span className="block-ready-label">{block.label}</span>
+          <span className="block-edit-hint" aria-hidden="true"><Pencil /></span>
+        </div>
+      )}
       {block.kind === "photo" && (
-        <div className="photo-drop"><span className="lens" /><span><strong>Photo upload</strong><small>Camera or photo library</small></span></div>
+        <div className="photo-drop"><span className="lens" /><span><strong>Add photo</strong><small>Camera or photo library</small></span></div>
       )}
       {block.kind === "text" && <div className="faux-input tall">Type here…</div>}
       {block.kind === "number" && (
         <div className="number-row">
           <div className="faux-input grow">123</div>
-          <input
-            className="unit"
-            value={block.unit}
-            maxLength={12}
-            placeholder="unit"
-            onChange={(e) => onChange({ ...block, unit: e.target.value })}
-            aria-label="Unit"
-          />
+          {editing ? (
+            <input
+              className="unit"
+              value={block.unit}
+              maxLength={12}
+              placeholder="unit"
+              onChange={(e) => onChange({ ...block, unit: e.target.value })}
+              aria-label="Unit"
+            />
+          ) : <span className="unit unit-preview">{block.unit || "unit"}</span>}
         </div>
       )}
       {block.kind === "buttons" && (
         <>
           {/* the keys wrap into an adaptive grid: the last key fills its row */}
           <div className="key-grid">
-            {block.options.map((key, i) => (
+            {block.options.map((key, i) => editing ? (
               <input
                 key={i}
                 className="button-key"
@@ -1141,24 +1181,26 @@ function BlockRow({
                 onChange={(e) => setOptions(block.options.map((k, j) => (j === i ? e.target.value : k)))}
                 aria-label={`Button ${i + 1} label`}
               />
-            ))}
+            ) : <span key={i} className="button-key">{key}</span>)}
           </div>
-          <div className="add-row key-ctl">
-            <button
-              disabled={block.options.length <= 1}
-              onClick={() => setOptions(block.options.slice(0, -1))}
-              aria-label="Remove last button"
-            >
-              − Button
-            </button>
-            <button
-              disabled={block.options.length >= LIMITS.options}
-              onClick={() => setOptions([...block.options, ""])}
-              aria-label="Add button"
-            >
-              + Button
-            </button>
-          </div>
+          {editing && (
+            <div className="add-row key-ctl">
+              <button
+                disabled={block.options.length <= 1}
+                onClick={() => setOptions(block.options.slice(0, -1))}
+                aria-label="Remove last button"
+              >
+                − Button
+              </button>
+              <button
+                disabled={block.options.length >= LIMITS.options}
+                onClick={() => setOptions([...block.options, ""])}
+                aria-label="Add button"
+              >
+                + Button
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>
