@@ -235,8 +235,8 @@ and work date. Imported history does not pass through form validation and does n
 template-derived fact rows. Numeric/field fact queries apply to Field submissions and existing
 legacy fact rows; report counts and template/site/date browsing include both kinds of history.
 The sidecar authenticates with an
-**integration token** (Members → Integrations; shown once, stored hashed, revocable) which acts as a
-*member* of one team and nothing else: no `/me`, no chats, no other team, no admin routes.
+**integration token** (Members → Integrations; shown once, stored hashed, revocable). Tokens have
+the `imports:write` scope, expire after 90 days, and can only call the endpoint below for their team.
 
 ```
 POST /api/teams/<team id>/import
@@ -247,7 +247,7 @@ Content-Type: application/json
 ```jsonc
 { "records": [                                   // 1–200 per call; at most 1 MiB total
   { "siteId": "<uuid>",                          // an existing site of the team (resolve addresses before you get here)
-    "templateId": "<uuid>",                      // an existing template; create it first via POST /templates + PUT if the TM minted a new proto-type
+    "templateId": "<uuid>",                      // an existing template, prepared by a signed-in team member
     "performedAt": "2024-01-17T14:00:00Z",       // when the work was done, ISO 8601, in the past
     "byName": "R. Ortiz",                        // optional: the technician named on the document; else the token's name
     "history": {
@@ -288,16 +288,14 @@ files it through the gate above. Zero dependencies, Node 18+:
 node tools/import-graph.mjs graph.json --team <id> --token aludel_… --base https://<host> [--dry]
 ```
 
-`--dry` prints the plan and writes nothing. Otherwise a template the map file has never seen is
-created from its blocks. A block's kind is what the export declares (`valueKind`: number,
+`--dry` prints the plan and writes nothing. A live run requires `aludel-map.json` to map source
+templates, blocks, and sites to objects prepared in the app; the import token cannot create them.
+A block's kind is what the export declares (`valueKind`: number,
 identifier and date/time as text, choice → buttons with its `choiceOptions`, image → photo,
 constant → left on the form) and, for an export that declares nothing, inferred from every value
 the corpus filed under it (all numeric → number; a closed set of 2–6 short keys → buttons; image
-filenames → photo; the same paragraph on every record → left on the form). Blocks are labelled by
-the export's `conceptDisplayName` so one series lines up across forms (`--form-labels` keeps each
-form's own wording). A site is created from its address with the address as the location note
-and the place left for the picker, and both are remembered in `aludel-map.json` so a rerun reuses
-them. A record's `performedAt` is its date of service and time of service in the shop's zone
+filenames → photo; the same paragraph on every record → left on the form). A record's `performedAt`
+is its date of service and time of service in the shop's zone
 (`--tz`, else the graph's `timezone`, else America/New_York), and its identity is the export's
 `externalId`, so a rerun never files twice.
 
@@ -320,7 +318,11 @@ row of application data belongs to a team.
   additionally change roles and delete the team. A team can never be left without an owner.
 - **Invites** are single-use tokens (hash stored, raw shown once), expire in 7 days, and
   are bound to the address they were issued to — holding the link is not enough.
+- **Integration tokens** are hashed, revocable, `imports:write`-only credentials with a
+  90-day lifetime. An invalid bearer header fails authentication instead of falling back to a cookie.
 - **CSRF**: `SameSite=Lax` plus an `Origin` check on every mutation.
+- **Abuse controls** use D1-backed fixed windows for login, team creation, document imports,
+  direct imports, route optimization, and assistant requests. Client IPs are hashed before storage.
 
 ### Google setup
 
@@ -370,10 +372,9 @@ secret) to restrict it:
 ALLOWED_EMAIL_DOMAINS = "acme.com,acme.co.uk"
 ```
 
-Sign-in then requires either an address on one of those domains, or a live invite for that
-exact address — so contractors on other domains still work without opening the door. Leave
-it unset and any Google account may sign in; they land in their own empty team and can
-never see yours, but the account and team rows are theirs to create.
+Sign-in requires either an address on one of those domains or a live invite for that exact
+address. With no allow-list, sign-in is closed except to invitees. A deliberately public
+deployment must explicitly set `ALLOW_PUBLIC_SIGN_IN = "true"`.
 
 ## Develop
 

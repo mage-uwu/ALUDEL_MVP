@@ -43,11 +43,14 @@ test('PDF originals transfer in bounded chunks, survive restarts and remain view
   let mf=new Miniflare(opts);t.after(async()=>{await mf.dispose();await rm(persist,{recursive:true,force:true});});await mf.ready;await(await mf.dispatchFetch('http://localhost/api/me')).arrayBuffer();
   const team=randomUUID(),other=randomUUID(),key='p'.repeat(43),otherKey='q'.repeat(43),db=await mf.getD1Database('DB'),now=new Date().toISOString();
   for(const [id,token]of[[team,key],[other,otherKey]]){
+    const user=randomUUID();
     await db.prepare('INSERT INTO teams(id,name,created_at) VALUES(?,?,?)').bind(id,'PDF tests',now).run();
-    await db.prepare('INSERT INTO tokens(id,team_id,name,created_by,created_at) VALUES(?,?,?,?,?)').bind(createHash('sha256').update(token).digest('base64url'),id,'Test','test',now).run();
+    await db.prepare('INSERT INTO users(id,google_sub,email,name,created_at) VALUES(?,?,?,?,?)').bind(user,user,`${user}@example.com`,'PDF test',now).run();
+    await db.prepare('INSERT INTO memberships(team_id,user_id,role,created_at) VALUES(?,?,?,?)').bind(id,user,'owner',now).run();
+    await db.prepare('INSERT INTO sessions(id,user_id,created_at,last_seen,expires_at) VALUES(?,?,?,?,?)').bind(createHash('sha256').update(token).digest('base64url'),user,now,now,new Date(Date.now()+86_400_000).toISOString()).run();
   }
   const call=async(path,init={},target=team,token=key)=>{
-    const res=await mf.dispatchFetch(`http://localhost/api/teams/${target}${path}`,{...init,headers:{authorization:`Bearer aludel_${token}`,...init.headers}});
+    const res=await mf.dispatchFetch(`http://localhost/api/teams/${target}${path}`,{...init,headers:{cookie:`aludel_session=${token}`,origin:'http://localhost',...init.headers}});
     return new Response(await res.arrayBuffer(),{status:res.status,headers:res.headers});
   };
   const send=async()=>{
